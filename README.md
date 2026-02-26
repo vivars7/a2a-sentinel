@@ -506,7 +506,7 @@ Apache License 2.0 — See [LICENSE](LICENSE) for details.
 ## Acknowledgments
 
 - **A2A Protocol**: Linux Foundation (Google, Microsoft, AWS, Salesforce, SAP)
-- **Design review**: Security architects, Go runtime leads, SRE engineers, OSS strategists
+- **Built with**: [Claude Code](https://claude.ai) — AI-assisted development
 - **Inspiration**: [agentgateway](https://github.com/solo-io/agentgateway) (agentgateway is the production platform; sentinel is the developer's gateway)
 
 ---
