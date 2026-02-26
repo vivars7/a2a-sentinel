@@ -416,6 +416,12 @@ func (s *Server) buildSecurityPipelineConfig() security.SecurityPipelineConfig {
 			UserBurst:           s.cfg.Security.RateLimit.User.Burst,
 			UserCleanupInterval: s.cfg.Security.RateLimit.User.CleanupInterval.Duration,
 		},
+		Replay: security.ReplayDetectorConfig{
+			Enabled:         s.cfg.Security.Replay.Enabled,
+			Window:          s.cfg.Security.Replay.Window.Duration,
+			NoncePolicy:     s.cfg.Security.Replay.NoncePolicy,
+			CleanupInterval: s.cfg.Security.Replay.CleanupInterval.Duration,
+		},
 		GlobalRateLimit: s.cfg.Listen.GlobalRateLimit,
 		TrustedProxies:  s.cfg.Listen.TrustedProxies,
 		Push:            s.cfg.Security.Push,

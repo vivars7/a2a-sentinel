@@ -131,11 +131,12 @@ type JWTConfig struct {
 
 // ReplayConfig controls nonce/timestamp replay attack prevention.
 type ReplayConfig struct {
-	Enabled     bool     `yaml:"enabled"`
-	Window      Duration `yaml:"window"`
-	NoncePolicy string   `yaml:"nonce_policy"`
-	Store       string   `yaml:"store"`
-	RedisURL    string   `yaml:"redis_url"`
+	Enabled         bool     `yaml:"enabled"`
+	Window          Duration `yaml:"window"`
+	NoncePolicy     string   `yaml:"nonce_policy"`
+	Store           string   `yaml:"store"`
+	RedisURL        string   `yaml:"redis_url"`
+	CleanupInterval Duration `yaml:"cleanup_interval"`
 }
 
 // RateLimitConfig defines rate limiting by IP, user, and per-agent.
