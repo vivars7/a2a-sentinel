@@ -114,7 +114,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 	logger := buildLogger(cfg)
 
 	// 2. Create agentcard.Manager
-	cardManager := agentcard.NewManager(cfg.Agents, logger)
+	cardManager := agentcard.NewManager(cfg.Agents, cfg.Security.CardSignature, logger)
 
 	// 3. Create StreamManager
 	streamMgr := proxy.NewStreamManager()

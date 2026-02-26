@@ -119,6 +119,22 @@ func (m *Manager) fetchCard(ctx context.Context, state *agentState) (*protocol.A
 		return nil, fmt.Errorf("reading agent %q card body: %w", state.name, err)
 	}
 
+	// JWS signature verification: if configured, verify before parsing JSON.
+	if m.jwsVerifier != nil && m.jwsVerifier.IsConfigured() {
+		verified, verifyErr := m.jwsVerifier.VerifyCardSignature(ctx, body)
+		if verifyErr != nil {
+			if m.jwsVerifier.RequireSignature() {
+				return nil, fmt.Errorf("agent %q card JWS verification: %w", state.name, verifyErr)
+			}
+			m.logger.Warn("JWS verification failed, using unsigned card",
+				"agent", state.name,
+				"error", verifyErr,
+			)
+		} else {
+			body = verified
+		}
+	}
+
 	var card protocol.AgentCard
 	if err := json.Unmarshal(body, &card); err != nil {
 		return nil, fmt.Errorf("parsing agent %q card JSON: %w", state.name, err)

@@ -4,6 +4,7 @@ package agentcard
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -14,10 +15,11 @@ import (
 
 // Manager manages Agent Card lifecycle for all configured agents.
 type Manager struct {
-	mu     sync.RWMutex
-	agents map[string]*agentState
-	logger *slog.Logger
-	cancel context.CancelFunc
+	mu          sync.RWMutex
+	agents      map[string]*agentState
+	jwsVerifier *JWSVerifier
+	logger      *slog.Logger
+	cancel      context.CancelFunc
 }
 
 // agentState holds the runtime state for a single agent.
@@ -49,7 +51,8 @@ type AgentStatus struct {
 }
 
 // NewManager creates a new Agent Card Manager from the agent configuration list.
-func NewManager(agents []config.AgentConfig, logger *slog.Logger) *Manager {
+// The sigCfg parameter controls JWS signature verification for fetched Agent Cards.
+func NewManager(agents []config.AgentConfig, sigCfg config.CardSignatureConfig, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -69,17 +72,31 @@ func NewManager(agents []config.AgentConfig, logger *slog.Logger) *Manager {
 		}
 	}
 
+	verifier := NewJWSVerifier(JWSVerifierConfig{
+		Require:         sigCfg.Require,
+		TrustedJWKSURLs: sigCfg.TrustedJWKSURLs,
+		CacheTTL:        sigCfg.CacheTTL.Duration,
+	})
+
 	return &Manager{
-		agents: states,
-		logger: logger,
+		agents:      states,
+		jwsVerifier: verifier,
+		logger:      logger,
 	}
 }
 
 // Start begins polling all agents for their Agent Cards.
-// It launches one goroutine per agent and returns immediately.
+// It initializes the JWKS cache (if configured) and launches one goroutine per agent.
 func (m *Manager) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
+
+	// Initialize JWKS cache for Agent Card signature verification.
+	if m.jwsVerifier != nil {
+		if err := m.jwsVerifier.StartCache(ctx); err != nil {
+			return fmt.Errorf("starting JWS verifier cache: %w", err)
+		}
+	}
 
 	for _, state := range m.agents {
 		go m.pollAgent(ctx, state)

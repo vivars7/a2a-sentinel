@@ -133,7 +133,7 @@ func TestManager_NormalPolling(t *testing.T) {
 		agentConfigFromServer("agent1", srv),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -172,7 +172,7 @@ func TestManager_ServerDown(t *testing.T) {
 		agentConfigFromServer("agent-down", srv),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -213,7 +213,7 @@ func TestManager_HealthRecovery(t *testing.T) {
 		agentConfigFromServer("recoverable", srv),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -262,7 +262,7 @@ func TestManager_CardChangeAlert(t *testing.T) {
 		}),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -315,7 +315,7 @@ func TestManager_CardChangeAuto(t *testing.T) {
 		}),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -364,7 +364,7 @@ func TestManager_AggregatedCard(t *testing.T) {
 		agentConfigFromServer("agent-b", srv2),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -408,7 +408,7 @@ func TestManager_AggregatedCardNoSentinelFields(t *testing.T) {
 		agentConfigFromServer("clean-agent", srv),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -479,7 +479,7 @@ func TestManager_AllowInsecureFalse(t *testing.T) {
 		}),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -671,7 +671,7 @@ func TestManager_UnhealthyExcluded(t *testing.T) {
 		agentConfigFromServer("down-one", srv2),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -733,7 +733,7 @@ func TestManager_AllAgentStates(t *testing.T) {
 		agentConfigFromServer("status-agent", srv),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -771,7 +771,7 @@ func TestManager_AllAgentStates(t *testing.T) {
 }
 
 func TestManager_NonexistentAgent(t *testing.T) {
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 
 	_, ok := mgr.GetCard("nonexistent")
 	if ok {
@@ -886,7 +886,7 @@ func TestDetectChanges_CapabilitiesChange(t *testing.T) {
 
 // TestHandleCardChange_ApprovePolicy tests the approve policy path.
 func TestHandleCardChange_ApprovePolicy(t *testing.T) {
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 	oldCard := testCard("agent", 2)
 	newCard := testCard("agent", 3)
 	newCard.Version = "2.0"
@@ -908,7 +908,7 @@ func TestHandleCardChange_ApprovePolicy(t *testing.T) {
 
 // TestHandleCardChange_UnknownPolicy tests the unknown policy fallback path.
 func TestHandleCardChange_UnknownPolicy(t *testing.T) {
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 	oldCard := testCard("agent", 2)
 	newCard := testCard("agent", 3)
 
@@ -929,7 +929,7 @@ func TestHandleCardChange_UnknownPolicy(t *testing.T) {
 
 // TestHandleCardChange_AlertNonCritical covers the non-critical branch in alert policy.
 func TestHandleCardChange_AlertNonCritical(t *testing.T) {
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 	oldCard := testCard("agent", 2)
 	newCard := testCard("agent", 2)
 	newCard.Name = "changed-name"
@@ -963,7 +963,7 @@ func TestNewManager_NilLogger(t *testing.T) {
 		},
 	}
 	// Pass nil logger — should not panic
-	mgr := NewManager(agents, nil)
+	mgr := NewManager(agents, config.CardSignatureConfig{}, nil)
 	if mgr == nil {
 		t.Fatal("NewManager with nil logger should return non-nil manager")
 	}
@@ -979,7 +979,7 @@ func TestFetchCard_BadStatusCode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 	state := &agentState{
 		name:          "test-agent",
 		url:           srv.URL,
@@ -1005,7 +1005,7 @@ func TestFetchCard_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 	state := &agentState{
 		name:          "test-agent",
 		url:           srv.URL,
@@ -1043,7 +1043,7 @@ func TestDetectChanges_DescriptionChange(t *testing.T) {
 // We use a context that is already canceled to trigger the error path indirectly,
 // but a simpler approach is an invalid URL scheme.
 func TestFetchCard_BadURL(t *testing.T) {
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 	state := &agentState{
 		name:          "bad-url-agent",
 		url:           "http://invalid host with spaces",
@@ -1075,7 +1075,7 @@ func TestFetchCard_BodyReadError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	mgr := NewManager(nil, testLogger())
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
 	state := &agentState{
 		name:          "body-error-agent",
 		url:           srv.URL,
@@ -1107,7 +1107,7 @@ func TestManager_CardChangeApprove_Integration(t *testing.T) {
 		}),
 	}
 
-	mgr := NewManager(agents, testLogger())
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
