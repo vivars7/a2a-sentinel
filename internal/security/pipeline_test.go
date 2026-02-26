@@ -329,14 +329,16 @@ func TestGlobalRateLimiterName(t *testing.T) {
 	}
 }
 
-// stopRateLimiters stops all rate limiters in the middleware chain.
+// stopMiddlewares stops all stoppable middlewares in the chain.
 func stopRateLimiters(mws []Middleware) {
 	for _, mw := range mws {
-		switch rl := mw.(type) {
+		switch m := mw.(type) {
 		case *IPRateLimiter:
-			rl.Stop()
+			m.Stop()
 		case *UserRateLimiter:
-			rl.Stop()
+			m.Stop()
+		case *ReplayDetector:
+			m.Stop()
 		}
 	}
 }

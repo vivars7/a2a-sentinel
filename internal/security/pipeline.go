@@ -3,7 +3,7 @@
 // Layer 1 (Pre-Auth): GlobalRateLimiter, IPRateLimiter
 // Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter
 // Post-Auth: SSRFChecker (push notification URL validation)
-// Stubs (v0.2): JWSVerifier, ReplayDetector
+// Stubs (v0.2): JWSVerifier
 package security
 
 import (
@@ -24,6 +24,7 @@ type Middleware interface {
 type SecurityPipelineConfig struct {
 	Auth            AuthPipelineConfig
 	RateLimit       RateLimitPipelineConfig
+	Replay          ReplayDetectorConfig
 	GlobalRateLimit int
 	TrustedProxies  []string
 	Push            config.PushConfig
@@ -53,8 +54,8 @@ type RateLimitPipelineConfig struct {
 
 // BuildPipeline constructs the ordered security middleware chain.
 // Layer 1 (Pre-Auth): GlobalRateLimiter, IPRateLimiter
-// Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter, SSRFChecker
-// Stubs (v0.2): JWSVerifier, ReplayDetector
+// Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter, ReplayDetector, SSRFChecker
+// Stubs (v0.2): JWSVerifier
 func BuildPipeline(cfg SecurityPipelineConfig) []Middleware {
 	var mws []Middleware
 
@@ -83,9 +84,11 @@ func BuildPipeline(cfg SecurityPipelineConfig) []Middleware {
 		))
 	}
 
-	// v0.2 stubs
+	// JWS verification (v0.2 stub)
 	mws = append(mws, NewJWSVerifier())
-	mws = append(mws, NewReplayDetector())
+
+	// Replay detection
+	mws = append(mws, NewReplayDetector(cfg.Replay, cfg.Logger))
 
 	// SSRF protection for push notification URLs
 	mws = append(mws, NewSSRFChecker(cfg.Push, cfg.Logger))

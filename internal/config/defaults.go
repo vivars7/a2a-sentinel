@@ -140,6 +140,9 @@ func applyReplayDefaults(r *ReplayConfig) {
 	if r.Store == "" {
 		r.Store = "memory"
 	}
+	if r.CleanupInterval.Duration == 0 {
+		r.CleanupInterval.Duration = 60 * time.Second
+	}
 }
 
 func applyRateLimitDefaults(rl *RateLimitConfig) {
