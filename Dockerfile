@@ -1,0 +1,13 @@
+FROM golang:1.26-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /sentinel ./cmd/sentinel
+
+FROM alpine:3.19
+RUN apk --no-cache add ca-certificates
+COPY --from=builder /sentinel /usr/local/bin/sentinel
+EXPOSE 8080 8081
+ENTRYPOINT ["sentinel"]
+CMD ["serve"]

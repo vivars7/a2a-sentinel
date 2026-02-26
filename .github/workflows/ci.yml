@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Run tests with race detector
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Show coverage summary
+        run: go tool cover -func=coverage.out
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build binary
+        run: CGO_ENABLED=0 go build -ldflags="-s -w" -o sentinel ./cmd/sentinel/
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-linux-amd64
+          path: sentinel
+
+  docker:
+    name: Docker E2E
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start services
+        run: docker compose up -d
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for services to be healthy..."
+          for i in $(seq 1 30); do
+            if docker compose ps | grep -q "(healthy)"; then
+              echo "Services healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          docker compose ps
+
+      - name: Run E2E tests
+        run: bash examples/test-client/test.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down
+
+  docker-publish:
+    name: Publish Images
+    runs-on: ubuntu-latest
+    needs: [test, build, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Build and push sentinel
+        run: |
+          docker build -t ghcr.io/vivars7/a2a-sentinel:latest -t ghcr.io/vivars7/a2a-sentinel:sha-${{ env.SHORT_SHA }} .
+          docker push ghcr.io/vivars7/a2a-sentinel:latest
+          docker push ghcr.io/vivars7/a2a-sentinel:sha-${{ env.SHORT_SHA }}
+
+      - name: Build and push echo-agent
+        run: |
+          docker build -t ghcr.io/vivars7/a2a-sentinel-echo-agent:latest -t ghcr.io/vivars7/a2a-sentinel-echo-agent:sha-${{ env.SHORT_SHA }} ./examples/echo-agent
+          docker push ghcr.io/vivars7/a2a-sentinel-echo-agent:latest
+          docker push ghcr.io/vivars7/a2a-sentinel-echo-agent:sha-${{ env.SHORT_SHA }}
+
+      - name: Build and push streaming-agent
+        run: |
+          docker build -t ghcr.io/vivars7/a2a-sentinel-streaming-agent:latest -t ghcr.io/vivars7/a2a-sentinel-streaming-agent:sha-${{ env.SHORT_SHA }} ./examples/streaming-agent
+          docker push ghcr.io/vivars7/a2a-sentinel-streaming-agent:latest
+          docker push ghcr.io/vivars7/a2a-sentinel-streaming-agent:sha-${{ env.SHORT_SHA }}

@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>a2a-sentinel — Interactive Demo Dashboard</title>
+<style>
+/* ── Reset & Base ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0d1117;
+  --surface:     #161b22;
+  --surface-2:   #1c2128;
+  --border:      #30363d;
+  --border-dim:  #21262d;
+  --text:        #e6edf3;
+  --text-dim:    #8b949e;
+  --text-muted:  #484f58;
+  --blue:        #58a6ff;
+  --blue-dim:    #1f6feb;
+  --green:       #3fb950;
+  --green-dim:   #1a7f37;
+  --red:         #f85149;
+  --red-dim:     #8d1f1b;
+  --yellow:      #d29922;
+  --yellow-dim:  #7d5f0a;
+  --purple:      #bc8cff;
+  --font-mono:   "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
+  --radius:      8px;
+  --radius-sm:   4px;
+  --shadow:      0 1px 3px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+#header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+#header .logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#header .logo-icon {
+  width: 28px;
+  height: 28px;
+  background: var(--blue-dim);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--blue);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+#header h1 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+#header .subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+#header .spacer { flex: 1; }
+
+#header .status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+#header .status-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background .3s;
+}
+
+#header .status-pill .dot.ok   { background: var(--green); box-shadow: 0 0 6px var(--green); }
+#header .status-pill .dot.err  { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+#header .status-pill .dot.warn { background: var(--yellow); }
+
+/* ── Main Grid ─────────────────────────────────────────────────────────── */
+#grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+  padding: 16px;
+  min-height: calc(100vh - 57px);
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  #grid { grid-template-columns: 1fr 1fr; }
+  #panel-log { grid-column: 1 / -1; }
+}
+@media (max-width: 768px) {
+  #grid { grid-template-columns: 1fr; }
+  #panel-log { grid-column: auto; }
+}
+
+/* ── Panel ─────────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--surface-2);
+}
+
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.panel-body { padding: 16px; }
+
+/* ── Status Indicators ─────────────────────────────────────────────────── */
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+
+.status-label { color: var(--text-dim); font-size: 12px; }
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.status-badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-badge.ok   { color: var(--green); }
+.status-badge.ok .dot   { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.status-badge.err  { color: var(--red); }
+.status-badge.err .dot  { background: var(--red); }
+.status-badge.pend { color: var(--text-muted); }
+.status-badge.pend .dot { background: var(--text-muted); }
+
+/* ── Agent Cards ───────────────────────────────────────────────────────── */
+.agent-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.agent-card:last-child { margin-bottom: 0; }
+
+.agent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.agent-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--blue);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.badge-stream { background: rgba(188,140,255,.15); color: var(--purple); border: 1px solid rgba(188,140,255,.3); }
+.badge-sync   { background: rgba(88,166,255,.15);  color: var(--blue);   border: 1px solid rgba(88,166,255,.3); }
+.badge-ok     { background: rgba(63,185,80,.15);   color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+.badge-err    { background: rgba(248,81,73,.15);   color: var(--red);    border: 1px solid rgba(248,81,73,.3); }
+
+.agent-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.skills-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.skill-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--border-dim);
+  border-radius: 3px;
+  color: var(--text-dim);
+}
+
+/* ── Auto-refresh toggle ───────────────────────────────────────────────── */
+.refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-dim);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.toggle {
+  position: relative;
+  width: 30px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--text-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .2s;
+}
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  top: 2px;
+  background: white;
+  border-radius: 50%;
+  transition: transform .2s;
+}
+.toggle input:checked + .toggle-slider { background: var(--blue-dim); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(14px); }
+
+/* ── Request Tester ────────────────────────────────────────────────────── */
+.form-group { margin-bottom: 12px; }
+
+.form-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.form-select, .form-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color .15s;
+}
+.form-select:focus, .form-input:focus { border-color: var(--blue-dim); }
+.form-select option { background: var(--surface-2); }
+
+.radio-group {
+  display: flex;
+  gap: 4px;
+}
+
+.radio-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim);
+  transition: all .15s;
+  user-select: none;
+}
+.radio-btn:hover { border-color: var(--blue-dim); color: var(--text); }
+.radio-btn input { display: none; }
+.radio-btn.active { background: rgba(31,111,235,.2); border-color: var(--blue-dim); color: var(--blue); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary {
+  background: var(--blue-dim);
+  border-color: var(--blue-dim);
+  color: white;
+}
+.btn-primary:not(:disabled):hover { background: var(--blue); border-color: var(--blue); }
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+.btn-ghost:not(:disabled):hover { border-color: var(--text-dim); color: var(--text); }
+
+.send-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.latency-display {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.latency-display span { color: var(--blue); }
+
+/* ── Results Area ──────────────────────────────────────────────────────── */
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-dim);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-top: 12px;
+}
+
+.results-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  display: none;
+}
+.spinner.active { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#results-box {
+  min-height: 180px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border-dim);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.result-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 24px 0;
+}
+
+/* ── JSON Syntax Highlight ─────────────────────────────────────────────── */
+.json-key     { color: #79c0ff; }
+.json-str     { color: #a5d6ff; }
+.json-num     { color: #f2cc60; }
+.json-bool    { color: var(--purple); }
+.json-null    { color: var(--text-muted); }
+.json-brace   { color: var(--text-dim); }
+
+/* ── SSE Events ────────────────────────────────────────────────────────── */
+.sse-event {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-dim);
+}
+.sse-event:last-child { border-bottom: none; }
+
+.sse-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-right: 8px;
+}
+
+.sse-type {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-right: 8px;
+}
+.sse-type-status  { background: rgba(255,255,255,.06); color: var(--text-dim); }
+.sse-type-artifact { background: rgba(63,185,80,.12); color: var(--green); }
+
+.sse-state-working   { color: var(--yellow); font-weight: 600; }
+.sse-state-completed { color: var(--green);  font-weight: 600; }
+.sse-state-failed    { color: var(--red);    font-weight: 600; }
+
+.sse-text { color: var(--text); }
+
+/* ── Flow Visualization ────────────────────────────────────────────────── */
+.flow-diagram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 12px 0;
+  margin-bottom: 12px;
+  font-size: 11px;
+}
+
+.flow-node {
+  padding: 5px 10px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-dim);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.flow-node.active { border-color: var(--blue-dim); color: var(--blue); background: rgba(31,111,235,.1); }
+
+.flow-arrow {
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  transition: color .2s;
+}
+.flow-arrow.lit { color: var(--blue); animation: pulse-arrow .5s ease; }
+@keyframes pulse-arrow {
+  0%   { color: var(--text-muted); }
+  50%  { color: var(--blue); }
+  100% { color: var(--blue); }
+}
+
+/* ── Log Entries ───────────────────────────────────────────────────────── */
+#log-list {
+  max-height: 440px;
+  overflow-y: auto;
+}
+
+.log-entry {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-dim);
+  font-size: 11px;
+  line-height: 1.5;
+  transition: background .15s;
+}
+.log-entry:last-child { border-bottom: none; }
+.log-entry:hover { background: var(--surface-2); }
+
+.log-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+
+.log-time { color: var(--text-muted); }
+.log-agent { color: var(--blue); font-weight: 600; }
+.log-method { color: var(--purple); }
+
+.log-status {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 2px;
+  font-weight: 700;
+  font-size: 10px;
+}
+.log-status.s2xx { background: rgba(63,185,80,.15); color: var(--green); }
+.log-status.s4xx,
+.log-status.s5xx { background: rgba(248,81,73,.15);  color: var(--red); }
+.log-status.serr  { background: rgba(248,81,73,.15);  color: var(--red); }
+
+.log-latency { color: var(--text-muted); margin-left: auto; }
+
+.log-hint {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--yellow);
+  padding-left: 4px;
+  border-left: 2px solid var(--yellow-dim);
+}
+
+.log-docs {
+  font-size: 10px;
+  color: var(--blue-dim);
+  text-decoration: none;
+  display: inline-block;
+  margin-top: 2px;
+}
+.log-docs:hover { color: var(--blue); text-decoration: underline; }
+
+.log-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Raw toggle area ───────────────────────────────────────────────────── */
+.raw-box {
+  display: none;
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-dim);
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.raw-box.visible { display: block; }
+
+/* ── Divider ───────────────────────────────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: var(--border-dim);
+  margin: 12px 0;
+}
+
+/* ── Agents count chip ─────────────────────────────────────────────────── */
+.count-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+}
+.count-chip b { color: var(--text); }
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header id="header">
+  <div class="logo">
+    <div class="logo-icon">S</div>
+    <h1>a2a-sentinel</h1>
+    <span class="subtitle">Interactive Demo Dashboard</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="status-pill" id="header-status-pill">
+    <span class="dot" id="header-dot"></span>
+    <span id="header-status-text">Checking...</span>
+  </div>
+</header>
+
+<!-- ── Main 3-Panel Grid ───────────────────────────────────────────────── -->
+<main id="grid">
+
+  <!-- Panel 1: Gateway Status -->
+  <section class="panel" id="panel-status">
+    <div class="panel-header">
+      <span class="panel-title">Gateway Status</span>
+      <span class="count-chip" id="agents-count"><b id="agents-count-val">–</b> agents</span>
+    </div>
+    <div class="panel-body">
+
+      <div class="status-row">
+        <span class="status-label">Health</span>
+        <span class="status-badge pend" id="badge-health">
+          <span class="dot"></span><span id="badge-health-text">Checking…</span>
+        </span>
+      </div>
+
+      <div class="status-row">
+        <span class="status-label">Readiness</span>
+        <span class="status-badge pend" id="badge-ready">
+          <span class="dot"></span><span id="badge-ready-text">Checking…</span>
+        </span>
+      </div>
+
+      <div class="status-row" id="agents-row" style="display:none">
+        <span class="status-label">Agents online</span>
+        <span id="agents-online-text" style="font-size:12px;color:var(--green);font-weight:600"></span>
+      </div>
+
+      <div class="divider"></div>
+
+      <div style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Agent Cards</div>
+      <div id="agent-cards-container">
+        <div style="color:var(--text-muted);font-size:11px;font-style:italic;padding:8px 0">Loading agent cards…</div>
+      </div>
+
+      <div class="refresh-row">
+        <label class="toggle">
+          <input type="checkbox" id="auto-refresh" checked>
+          <span class="toggle-slider"></span>
+        </label>
+        <span>Auto-refresh every 5s</span>
+        <span style="margin-left:auto;color:var(--text-muted);font-size:10px" id="last-refresh-time"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Panel 2: Request Tester -->
+  <section class="panel" id="panel-tester">
+    <div class="panel-header">
+      <span class="panel-title">Request Tester</span>
+      <div class="latency-display" id="latency-display" style="visibility:hidden">
+        <span id="latency-val">–</span> ms
+      </div>
+    </div>
+    <div class="panel-body">
+
+      <div class="form-group">
+        <label class="form-label" for="agent-select">Agent</label>
+        <select class="form-select" id="agent-select">
+          <option value="echo">echo — /agents/echo/</option>
+          <option value="streaming">streaming — /agents/streaming/</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Method</label>
+        <div class="radio-group">
+          <label class="radio-btn active" id="method-send-label">
+            <input type="radio" name="method" value="message/send" checked id="method-send">
+            message/send
+          </label>
+          <label class="radio-btn" id="method-stream-label">
+            <input type="radio" name="method" value="message/stream" id="method-stream">
+            message/stream
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="message-input">Message</label>
+        <input class="form-input" type="text" id="message-input" value="Hello from the dashboard!" autocomplete="off">
+      </div>
+
+      <div class="send-row">
+        <button class="btn btn-primary" id="send-btn">&#9654; Send</button>
+        <button class="btn btn-ghost" id="raw-toggle-btn">Raw</button>
+      </div>
+
+      <div class="raw-box" id="raw-box"></div>
+
+      <div class="results-header">
+        <div class="results-header-left">
+          <div class="spinner" id="spinner"></div>
+          <span id="results-label" style="font-size:11px;color:var(--text-dim)">Response</span>
+        </div>
+        <button class="btn btn-ghost" id="clear-results-btn" style="padding:2px 8px;font-size:10px">Clear</button>
+      </div>
+      <div id="results-box">
+        <div class="result-empty">Send a request to see the response.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Panel 3: Live Log -->
+  <section class="panel" id="panel-log">
+    <div class="panel-header">
+      <span class="panel-title">Live Log</span>
+      <button class="btn btn-ghost" id="clear-log-btn" style="padding:2px 8px;font-size:10px">Clear</button>
+    </div>
+    <div class="panel-body" style="padding-bottom:8px">
+
+      <div class="flow-diagram" id="flow-diagram">
+        <span class="flow-node" id="fn-client">Client</span>
+        <span class="flow-arrow" id="fa-1">──▶</span>
+        <span class="flow-node" id="fn-sentinel">Sentinel</span>
+        <span class="flow-arrow" id="fa-2">──▶</span>
+        <span class="flow-node" id="fn-agent">Agent</span>
+        <span class="flow-arrow" id="fa-3">◀──</span>
+        <span class="flow-node" id="fn-sentinel2">Sentinel</span>
+        <span class="flow-arrow" id="fa-4">◀──</span>
+        <span class="flow-node" id="fn-client2">Client</span>
+      </div>
+
+      <div id="log-list">
+        <div class="log-empty" id="log-empty">No requests yet. Send one from the tester.</div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+const state = {
+  health:      null,
+  ready:       null,
+  agentCards:  [],
+  logEntries:  [],
+  inFlight:    false,
+  rawVisible:  false,
+  lastRequest: null,
+  lastResponse: null,
+  autoRefresh: true,
+  refreshTimer: null,
+  msgCounter:  0,
+};
+
+// ── Utilities ────────────────────────────────────────────────────────────
+function uid() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+function ts() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mm = String(d.getMinutes()).padStart(2,'0');
+  const ss = String(d.getSeconds()).padStart(2,'0');
+  const ms = String(d.getMilliseconds()).padStart(3,'0');
+  return `${hh}:${mm}:${ss}.${ms}`;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Simple JSON syntax highlighter — no library needed
+function highlightJSON(obj) {
+  const json = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+  return json.replace(
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?|[{}\[\],:])/g,
+    m => {
+      if (/^"/.test(m)) {
+        if (/:$/.test(m)) return `<span class="json-key">${escHtml(m)}</span>`;
+        return `<span class="json-str">${escHtml(m)}</span>`;
+      }
+      if (/true|false/.test(m)) return `<span class="json-bool">${m}</span>`;
+      if (/null/.test(m))       return `<span class="json-null">${m}</span>`;
+      if (/[{}\[\]]/.test(m))   return `<span class="json-brace">${m}</span>`;
+      if (/[,:]/.test(m))       return `<span class="json-brace">${m}</span>`;
+      return `<span class="json-num">${m}</span>`;
+    }
+  );
+}
+
+// ── Fetch helpers ────────────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(path, opts);
+  return res;
+}
+
+// ── Panel 1: Gateway Status ──────────────────────────────────────────────
+async function fetchHealth() {
+  try {
+    const res = await apiFetch('/api/healthz');
+    const data = await res.json();
+    state.health = data.status === 'ok' ? 'ok' : 'err';
+  } catch (e) {
+    state.health = 'err';
+  }
+
+  try {
+    const res2 = await apiFetch('/api/readyz');
+    const data2 = await res2.json();
+    state.ready = data2.status === 'ready' ? 'ok' : 'warn';
+    state.readyData = data2;
+  } catch (e) {
+    state.ready = 'err';
+    state.readyData = null;
+  }
+
+  renderHealthStatus();
+}
+
+function renderHealthStatus() {
+  // Health badge
+  const bh = document.getElementById('badge-health');
+  const bht = document.getElementById('badge-health-text');
+  bh.className = 'status-badge ' + (state.health === 'ok' ? 'ok' : state.health === 'err' ? 'err' : 'pend');
+  bht.textContent = state.health === 'ok' ? 'Healthy' : state.health === 'err' ? 'Unreachable' : 'Checking…';
+
+  // Ready badge
+  const br = document.getElementById('badge-ready');
+  const brt = document.getElementById('badge-ready-text');
+  br.className = 'status-badge ' + (state.ready === 'ok' ? 'ok' : state.ready === 'err' ? 'err' : state.ready === 'warn' ? 'pend' : 'pend');
+  brt.textContent = state.ready === 'ok' ? 'Ready' : state.ready === 'err' ? 'Unreachable' : 'Degraded';
+
+  // Agents online row
+  if (state.readyData && state.readyData.healthy_agents !== undefined) {
+    document.getElementById('agents-row').style.display = 'flex';
+    document.getElementById('agents-online-text').textContent =
+      `${state.readyData.healthy_agents} / ${state.readyData.total_agents}`;
+  }
+
+  // Header pill
+  const dot = document.getElementById('header-dot');
+  const txt = document.getElementById('header-status-text');
+  if (state.health === 'ok' && state.ready === 'ok') {
+    dot.className = 'dot ok';
+    txt.textContent = 'Online';
+  } else if (state.health === 'err' || state.ready === 'err') {
+    dot.className = 'dot err';
+    txt.textContent = 'Offline';
+  } else {
+    dot.className = 'dot warn';
+    txt.textContent = 'Degraded';
+  }
+
+  document.getElementById('last-refresh-time').textContent = 'updated ' + ts().slice(0,8);
+}
+
+async function fetchAgentCards() {
+  const container = document.getElementById('agent-cards-container');
+  const cards = [];
+
+  // Aggregated card
+  try {
+    const res = await apiFetch('/api/.well-known/agent.json');
+    const data = await res.json();
+    if (data.skills && Array.isArray(data.skills)) {
+      state.agentCards = data.skills;
+    }
+    // If aggregated provides a full agents array, use it
+    if (data.agents && Array.isArray(data.agents)) {
+      data.agents.forEach(a => cards.push(a));
+    }
+  } catch (_) {}
+
+  // Individual cards as fallback / supplement
+  const paths = [
+    { key: 'echo',      path: '/api/agents/echo/.well-known/agent.json' },
+    { key: 'streaming', path: '/api/agents/streaming/.well-known/agent.json' },
+  ];
+
+  for (const { key, path } of paths) {
+    try {
+      const res = await apiFetch(path);
+      const data = await res.json();
+      // Avoid duplicates
+      if (!cards.find(c => c.name === data.name)) {
+        data._key = key;
+        cards.push(data);
+      }
+    } catch (_) {}
+  }
+
+  // Update agents dropdown if we got names
+  if (cards.length > 0) {
+    const sel = document.getElementById('agent-select');
+    sel.innerHTML = '';
+    cards.forEach(c => {
+      const key = c._key || c.name || 'unknown';
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = `${c.name || key} — /agents/${key}/`;
+      sel.appendChild(opt);
+    });
+  }
+
+  document.getElementById('agents-count-val').textContent = cards.length || '–';
+
+  // Render cards
+  if (cards.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-muted);font-size:11px;font-style:italic;padding:8px 0">No agent cards returned. Is the gateway running?</div>';
+    return;
+  }
+
+  container.innerHTML = cards.map(card => {
+    const streaming = card.capabilities && card.capabilities.streaming;
+    const skills = card.skills || [];
+    return `
+      <div class="agent-card">
+        <div class="agent-card-header">
+          <span class="agent-name">${escHtml(card.name || '(unnamed)')}</span>
+          <span class="badge ${streaming ? 'badge-stream' : 'badge-sync'}">${streaming ? 'Streaming' : 'Sync'}</span>
+        </div>
+        <div class="agent-desc">${escHtml(card.description || 'No description.')}</div>
+        ${skills.length ? `<div class="skills-list">${skills.map(s => `<span class="skill-tag">${escHtml(s.name || s.id || s)}</span>`).join('')}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+// ── Panel 2: Request Tester ──────────────────────────────────────────────
+function setLoading(active) {
+  state.inFlight = active;
+  document.getElementById('send-btn').disabled = active;
+  document.getElementById('spinner').classList.toggle('active', active);
+  if (active) {
+    document.getElementById('results-label').textContent = 'Receiving…';
+  } else {
+    document.getElementById('results-label').textContent = 'Response';
+  }
+}
+
+function showResults(html) {
+  const box = document.getElementById('results-box');
+  box.innerHTML = html;
+  box.scrollTop = 0;
+}
+
+function appendToResults(html) {
+  const box = document.getElementById('results-box');
+  if (box.querySelector('.result-empty')) box.innerHTML = '';
+  box.insertAdjacentHTML('beforeend', html);
+  box.scrollTop = box.scrollHeight;
+}
+
+function updateRaw(reqObj, resText) {
+  state.lastRequest  = reqObj;
+  state.lastResponse = resText;
+  if (state.rawVisible) renderRaw();
+}
+
+function renderRaw() {
+  const box = document.getElementById('raw-box');
+  const reqStr = state.lastRequest ? JSON.stringify(state.lastRequest, null, 2) : '(none)';
+  const resStr = state.lastResponse || '(none)';
+  box.textContent = `// REQUEST\n${reqStr}\n\n// RESPONSE\n${resStr}`;
+}
+
+async function sendMessage() {
+  if (state.inFlight) return;
+
+  const agent = document.getElementById('agent-select').value;
+  const method = document.querySelector('input[name="method"]:checked').value;
+  const text   = document.getElementById('message-input').value.trim() || 'Hello!';
+
+  state.msgCounter++;
+  const msgId  = uid();
+  const taskId = uid();
+
+  const payload = {
+    jsonrpc: '2.0',
+    id: String(state.msgCounter),
+    method,
+    params: {
+      message: {
+        role: 'user',
+        parts: [{ text }],
+        messageId: msgId,
+      }
+    }
+  };
+
+  const endpoint = `/api/agents/${agent}/`;
+  setLoading(true);
+  showResults('<div class="result-empty">Waiting for response…</div>');
+  updateRaw(payload, null);
+
+  const t0 = performance.now();
+
+  if (method === 'message/stream') {
+    await sendStream(endpoint, payload, agent, t0);
+  } else {
+    await sendSync(endpoint, payload, agent, t0);
+  }
+}
+
+async function sendSync(endpoint, payload, agent, t0) {
+  let status = 0;
+  let resText = '';
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    status = res.status;
+    resText = await res.text();
+    const latency = Math.round(performance.now() - t0);
+
+    let parsed = null;
+    try { parsed = JSON.parse(resText); } catch (_) {}
+
+    if (parsed) {
+      showResults(`<pre style="white-space:pre-wrap;word-break:break-all">${highlightJSON(parsed)}</pre>`);
+    } else {
+      showResults(`<pre style="white-space:pre-wrap;color:var(--text-dim)">${escHtml(resText)}</pre>`);
+    }
+
+    updateRaw(payload, resText);
+    showLatency(latency);
+    animateFlow();
+
+    const hint = parsed && parsed.error && parsed.error.data && parsed.error.data.hint;
+    const docsUrl = parsed && parsed.error && parsed.error.data && parsed.error.data.docs_url;
+    addLogEntry({ agent, method: payload.method, status, latency, hint, docsUrl });
+
+  } catch (e) {
+    const latency = Math.round(performance.now() - t0);
+    showResults(`<div style="color:var(--red);padding:8px 0">${escHtml(String(e))}</div>`);
+    updateRaw(payload, String(e));
+    showLatency(latency);
+    addLogEntry({ agent, method: payload.method, status: 0, latency, hint: String(e) });
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function sendStream(endpoint, payload, agent, t0) {
+  let status = 0;
+  showResults('');
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    status = res.status;
+
+    if (!res.body) throw new Error('Response body is null — streaming not supported.');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let rawChunks = '';
+    let done = false;
+
+    while (!done) {
+      const { value, done: d } = await reader.read();
+      done = d;
+      if (value) {
+        const chunk = decoder.decode(value, { stream: true });
+        buf += chunk;
+        rawChunks += chunk;
+      }
+
+      // Parse SSE lines from buffer
+      let newlineIdx;
+      while ((newlineIdx = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, newlineIdx).trimEnd();
+        buf = buf.slice(newlineIdx + 1);
+
+        if (!line.startsWith('data:')) continue;
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr) continue;
+
+        try {
+          const evt = JSON.parse(jsonStr);
+          appendToResults(renderSSEEvent(evt));
+        } catch (_) {
+          appendToResults(`<div class="sse-event"><span class="sse-time">${ts()}</span><span style="color:var(--text-dim)">${escHtml(jsonStr)}</span></div>`);
+        }
+      }
+    }
+
+    const latency = Math.round(performance.now() - t0);
+    updateRaw(payload, rawChunks);
+    showLatency(latency);
+    animateFlow();
+    addLogEntry({ agent, method: payload.method, status, latency });
+
+  } catch (e) {
+    const latency = Math.round(performance.now() - t0);
+    appendToResults(`<div style="color:var(--red);padding:8px 0">${escHtml(String(e))}</div>`);
+    updateRaw(payload, String(e));
+    showLatency(latency);
+    addLogEntry({ agent, method: payload.method, status: 0, latency, hint: String(e) });
+  } finally {
+    setLoading(false);
+  }
+}
+
+function renderSSEEvent(evt) {
+  const time = ts();
+  const type = evt.type || 'unknown';
+
+  if (type === 'TaskStatusUpdate') {
+    const state = evt.status && evt.status.state || '';
+    const final = evt.final ? ' <span style="color:var(--text-muted);font-size:10px">(final)</span>' : '';
+    const stateClass = state === 'working' ? 'sse-state-working' : state === 'completed' ? 'sse-state-completed' : 'sse-state-failed';
+    return `<div class="sse-event">
+      <span class="sse-time">${time}</span>
+      <span class="sse-type sse-type-status">STATUS</span>
+      <span class="${stateClass}">${escHtml(state)}</span>${final}
+    </div>`;
+  }
+
+  if (type === 'TaskArtifactUpdate') {
+    const parts = evt.artifact && evt.artifact.parts || [];
+    const text = parts.map(p => p.text || '').join('');
+    return `<div class="sse-event">
+      <span class="sse-time">${time}</span>
+      <span class="sse-type sse-type-artifact">ARTIFACT</span>
+      <span class="sse-text">${escHtml(text)}</span>
+    </div>`;
+  }
+
+  // Generic fallback
+  return `<div class="sse-event">
+    <span class="sse-time">${time}</span>
+    <span class="sse-type sse-type-status">${escHtml(type)}</span>
+    <span style="color:var(--text-dim)">${escHtml(JSON.stringify(evt))}</span>
+  </div>`;
+}
+
+function showLatency(ms) {
+  const el = document.getElementById('latency-display');
+  el.style.visibility = 'visible';
+  document.getElementById('latency-val').textContent = ms;
+}
+
+// ── Flow animation ────────────────────────────────────────────────────────
+function animateFlow() {
+  const arrows = ['fa-1','fa-2','fa-3','fa-4'];
+  arrows.forEach((id, i) => {
+    setTimeout(() => {
+      const el = document.getElementById(id);
+      el.classList.add('lit');
+      setTimeout(() => el.classList.remove('lit'), 400);
+    }, i * 120);
+  });
+}
+
+// ── Panel 3: Log ─────────────────────────────────────────────────────────
+function addLogEntry({ agent, method, status, latency, hint, docsUrl }) {
+  const entry = { time: ts(), agent, method, status, latency, hint, docsUrl };
+  state.logEntries.unshift(entry);
+  if (state.logEntries.length > 20) state.logEntries.pop();
+  renderLog();
+}
+
+function renderLog() {
+  const list = document.getElementById('log-list');
+  if (state.logEntries.length === 0) {
+    list.innerHTML = '<div class="log-empty" id="log-empty">No requests yet. Send one from the tester.</div>';
+    return;
+  }
+
+  list.innerHTML = state.logEntries.map(e => {
+    let statusClass = 'serr';
+    if (e.status >= 200 && e.status < 300) statusClass = 's2xx';
+    else if (e.status >= 400 && e.status < 500) statusClass = 's4xx';
+    else if (e.status >= 500) statusClass = 's5xx';
+
+    const statusLabel = e.status === 0 ? 'ERR' : String(e.status);
+
+    return `<div class="log-entry">
+      <div class="log-meta">
+        <span class="log-time">${e.time.slice(0,8)}</span>
+        <span class="log-agent">${escHtml(e.agent)}</span>
+        <span class="log-method">${escHtml(e.method)}</span>
+        <span class="log-status ${statusClass}">${statusLabel}</span>
+        <span class="log-latency">${e.latency}ms</span>
+      </div>
+      ${e.hint ? `<div class="log-hint">Hint: ${escHtml(e.hint)}</div>` : ''}
+      ${e.docsUrl ? `<a class="log-docs" href="${escHtml(e.docsUrl)}" target="_blank" rel="noopener">${escHtml(e.docsUrl)}</a>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ── Auto-refresh ──────────────────────────────────────────────────────────
+function startAutoRefresh() {
+  stopAutoRefresh();
+  state.refreshTimer = setInterval(async () => {
+    if (state.autoRefresh && !state.inFlight) {
+      await fetchHealth();
+    }
+  }, 5000);
+}
+
+function stopAutoRefresh() {
+  if (state.refreshTimer) {
+    clearInterval(state.refreshTimer);
+    state.refreshTimer = null;
+  }
+}
+
+// ── Agent/Method sync ─────────────────────────────────────────────────────
+function syncMethodToAgent() {
+  const agent = document.getElementById('agent-select').value;
+  const sendLabel   = document.getElementById('method-send-label');
+  const streamLabel = document.getElementById('method-stream-label');
+  const sendRadio   = document.getElementById('method-send');
+  const streamRadio = document.getElementById('method-stream');
+
+  if (agent === 'streaming') {
+    streamRadio.checked = true;
+    sendLabel.classList.remove('active');
+    streamLabel.classList.add('active');
+  } else {
+    sendRadio.checked = true;
+    streamLabel.classList.remove('active');
+    sendLabel.classList.add('active');
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+async function init() {
+  // Wire up controls
+  document.getElementById('send-btn').addEventListener('click', sendMessage);
+
+  document.getElementById('message-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') sendMessage();
+  });
+
+  document.getElementById('agent-select').addEventListener('change', syncMethodToAgent);
+
+  document.querySelectorAll('input[name="method"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      document.querySelectorAll('.radio-btn').forEach(lbl => lbl.classList.remove('active'));
+      radio.closest('.radio-btn').classList.add('active');
+    });
+  });
+
+  document.getElementById('auto-refresh').addEventListener('change', e => {
+    state.autoRefresh = e.target.checked;
+    if (state.autoRefresh) startAutoRefresh();
+    else stopAutoRefresh();
+  });
+
+  document.getElementById('raw-toggle-btn').addEventListener('click', () => {
+    state.rawVisible = !state.rawVisible;
+    const box = document.getElementById('raw-box');
+    const btn = document.getElementById('raw-toggle-btn');
+    box.classList.toggle('visible', state.rawVisible);
+    btn.style.color = state.rawVisible ? 'var(--blue)' : '';
+    btn.style.borderColor = state.rawVisible ? 'var(--blue-dim)' : '';
+    if (state.rawVisible) renderRaw();
+  });
+
+  document.getElementById('clear-results-btn').addEventListener('click', () => {
+    showResults('<div class="result-empty">Send a request to see the response.</div>');
+    document.getElementById('latency-display').style.visibility = 'hidden';
+    state.lastRequest = null;
+    state.lastResponse = null;
+    if (state.rawVisible) renderRaw();
+  });
+
+  document.getElementById('clear-log-btn').addEventListener('click', () => {
+    state.logEntries = [];
+    renderLog();
+  });
+
+  // Initial data load
+  await Promise.all([fetchHealth(), fetchAgentCards()]);
+  startAutoRefresh();
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

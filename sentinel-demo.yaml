@@ -1,0 +1,24 @@
+agents:
+  - name: echo
+    url: http://echo-agent:9000
+    default: true
+    allow_insecure: true
+    poll_interval: 10s
+  - name: streaming
+    url: http://streaming-agent:9001
+    allow_insecure: true
+    poll_interval: 10s
+
+security:
+  auth:
+    mode: passthrough
+    allow_unauthenticated: true
+  rate_limit:
+    enabled: false
+
+routing:
+  mode: path-prefix
+
+logging:
+  level: debug
+  format: text

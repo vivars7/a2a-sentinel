@@ -1,0 +1,753 @@
+# a2a-sentinel Error Reference
+
+a2a-sentinel provides **educational error messages** for every block decision. Each error includes:
+- **Code**: HTTP status code
+- **Message**: Human-readable error description
+- **Hint**: Actionable guidance to resolve the issue
+- **DocsURL**: Link to relevant documentation
+
+This guide covers all error types, their causes, and troubleshooting steps.
+
+---
+
+## Error Response Format
+
+### HTTP Response
+
+When an error occurs in a regular HTTP request, sentinel returns a JSON error response with the HTTP status code set to the error code:
+
+```json
+{
+  "error": {
+    "code": 429,
+    "message": "Rate limit exceeded",
+    "hint": "Wait before retrying. Configure security.rate_limit in sentinel.yaml",
+    "docs_url": "https://a2a-sentinel.dev/docs/rate-limit"
+  }
+}
+```
+
+**Response header:**
+```
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+```
+
+### JSON-RPC 2.0 Response
+
+When the request is a JSON-RPC method call, sentinel returns a JSON-RPC error response with the error data embedded in the `data` field. HTTP status codes are mapped to JSON-RPC error codes:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-id",
+  "error": {
+    "code": -32600,
+    "message": "Rate limit exceeded",
+    "data": {
+      "code": 429,
+      "message": "Rate limit exceeded",
+      "hint": "Wait before retrying. Configure security.rate_limit in sentinel.yaml",
+      "docs_url": "https://a2a-sentinel.dev/docs/rate-limit"
+    }
+  }
+}
+```
+
+The `data` field contains the full SentinelError object, including the hint and docs_url. This allows clients to display educational messages even in JSON-RPC contexts.
+
+---
+
+## Error Catalog
+
+### Authentication & Authorization
+
+#### ErrAuthRequired
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 401 |
+| **Message** | Authentication required |
+| **Hint** | Set Authorization header: 'Bearer <token>' |
+| **DocsURL** | https://a2a-sentinel.dev/docs/auth |
+
+**When it occurs:**
+- No `Authorization` header is present
+- Security authentication is enabled and the request is not authenticated
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 401,
+    "message": "Authentication required",
+    "hint": "Set Authorization header: 'Bearer <token>'",
+    "docs_url": "https://a2a-sentinel.dev/docs/auth"
+  }
+}
+```
+
+**How to fix:**
+1. Add an `Authorization` header to your request:
+   ```bash
+   curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8080/agents/myagent/
+   ```
+2. If developing locally, you can disable authentication with `security.auth.mode: passthrough` in `sentinel.yaml`, or set `allow_unauthenticated: true` (not recommended for production)
+3. Ensure your token is valid and not expired
+
+---
+
+#### ErrAuthInvalid
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 401 |
+| **Message** | Invalid authentication token |
+| **Hint** | Check token expiry and issuer |
+| **DocsURL** | https://a2a-sentinel.dev/docs/auth |
+
+**When it occurs:**
+- Token is malformed or cannot be parsed
+- Token signature is invalid
+- Token has expired
+- Token issuer does not match configuration
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 401,
+    "message": "Invalid authentication token",
+    "hint": "Check token expiry and issuer",
+    "docs_url": "https://a2a-sentinel.dev/docs/auth"
+  }
+}
+```
+
+**How to fix:**
+1. Verify the token is still valid (not expired)
+2. Check the token's `iss` (issuer) claim matches your configuration
+3. Ensure the token was signed with the correct key
+4. For JWT tokens, decode and inspect claims:
+   ```bash
+   # Decode JWT (for debugging only)
+   echo $TOKEN | jq -R 'split(".") | .[1] | @base64d | fromjson'
+   ```
+5. See [Authentication Configuration](../docs/SECURITY.md#authentication) for setup details
+
+---
+
+#### ErrForbidden
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 403 |
+| **Message** | Access denied |
+| **Hint** | Check agent permissions and scope configuration |
+| **DocsURL** | https://a2a-sentinel.dev/docs/security |
+
+**When it occurs:**
+- Request is authenticated but lacks required permissions
+- Token scope does not allow access to the requested agent
+- Agent Card forbids the request
+- Client IP is not in allowlist (if configured)
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 403,
+    "message": "Access denied",
+    "hint": "Check agent permissions and scope configuration",
+    "docs_url": "https://a2a-sentinel.dev/docs/security"
+  }
+}
+```
+
+**How to fix:**
+1. Verify the token has the required scope for the agent
+2. Check the Agent Card permissions (via `GET /.well-known/agent.json`)
+3. If using IP-based restrictions, verify your client IP is in the allowlist
+4. Review your security configuration in `sentinel.yaml` under `security.auth`
+5. See [Security Configuration](../docs/SECURITY.md) for detailed setup
+
+---
+
+### Rate Limiting
+
+#### ErrRateLimited
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 429 |
+| **Message** | Rate limit exceeded |
+| **Hint** | Wait before retrying. Configure security.rate_limit in sentinel.yaml |
+| **DocsURL** | https://a2a-sentinel.dev/docs/rate-limit |
+
+**When it occurs:**
+- Request rate exceeds IP-based limit (pre-authentication)
+- Request rate exceeds user-based limit (post-authentication)
+- A burst of requests exhausts the rate limit bucket
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 429,
+    "message": "Rate limit exceeded",
+    "hint": "Wait before retrying. Configure security.rate_limit in sentinel.yaml",
+    "docs_url": "https://a2a-sentinel.dev/docs/rate-limit"
+  }
+}
+```
+
+**How to fix:**
+1. **Wait and retry**: Implement exponential backoff in your client
+   ```bash
+   # Retry after 30 seconds
+   sleep 30
+   curl http://localhost:8080/agents/myagent/
+   ```
+2. **Check your limits**: Review your configuration:
+   ```yaml
+   security:
+     rate_limit:
+       ip:
+         per_minute: 100      # Requests per minute per IP
+       user:
+         per_minute: 500      # Requests per minute per user
+   ```
+3. **Increase limits**: If you need higher throughput, adjust the config:
+   ```yaml
+   security:
+     rate_limit:
+       ip:
+         per_minute: 1000     # Increase IP limit
+       user:
+         per_minute: 5000     # Increase user limit
+   ```
+4. **Distribute load**: If hitting limits legitimately, consider:
+   - Using connection pools and batch requests
+   - Scaling sentinel horizontally (run multiple instances)
+   - Using separate rate limit buckets per service
+
+See [Rate Limiting Configuration](../docs/SECURITY.md#rate-limiting) for advanced options.
+
+---
+
+#### ErrStreamLimitExceeded
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 429 |
+| **Message** | Too many concurrent streams |
+| **Hint** | Max streams per agent reached. Configure agents[].max_streams |
+| **DocsURL** | https://a2a-sentinel.dev/docs/streaming |
+
+**When it occurs:**
+- Too many concurrent SSE streams are open to the same agent
+- Agent's `max_streams` limit is reached
+- Stream limit is enforced per-agent to prevent resource exhaustion
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 429,
+    "message": "Too many concurrent streams",
+    "hint": "Max streams per agent reached. Configure agents[].max_streams",
+    "docs_url": "https://a2a-sentinel.dev/docs/streaming"
+  }
+}
+```
+
+**How to fix:**
+1. **Close unused streams**: Ensure previous SSE connections are properly closed
+2. **Check active streams**: Monitor the number of concurrent streams to the agent
+3. **Increase the limit** in `sentinel.yaml`:
+   ```yaml
+   agents:
+     - name: myagent
+       url: http://agent:8000
+       max_streams: 1000     # Increase from default 100
+   ```
+4. **Load balance**: Distribute SSE connections across multiple agent instances
+5. See [Streaming Configuration](./ARCHITECTURE.md#sse-proxy) for details
+
+---
+
+### Protocol & Validation
+
+#### ErrInvalidRequest
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 400 |
+| **Message** | Invalid request format |
+| **Hint** | Check A2A protocol specification for correct message format |
+| **DocsURL** | https://a2a-sentinel.dev/docs/protocol |
+
+**When it occurs:**
+- Request body is malformed JSON
+- Message format does not conform to A2A protocol
+- Required fields are missing
+- Body size exceeds configured limit
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 400,
+    "message": "Invalid request format",
+    "hint": "Check A2A protocol specification for correct message format",
+    "docs_url": "https://a2a-sentinel.dev/docs/protocol"
+  }
+}
+```
+
+**How to fix:**
+1. **Validate JSON**: Ensure your request body is valid JSON
+   ```bash
+   # Test JSON validity
+   echo '{"jsonrpc": "2.0", "id": "1", "method": "message/send"}' | jq .
+   ```
+2. **Check A2A protocol**: Verify message format against [A2A Protocol Specification](https://a2a.dev)
+3. **Include required fields**: Common required fields:
+   - `jsonrpc`: "2.0"
+   - `id`: Request identifier (string or number)
+   - `method`: Method name (e.g., "message/send")
+   - `params`: Method parameters
+4. **Check body size**: If body is too large, increase the limit in `sentinel.yaml`:
+   ```yaml
+   listen:
+     max_body_size: 10MB    # Increase from default 1MB
+   ```
+5. See [A2A Protocol](./ARCHITECTURE.md#a2a-protocol) for message format examples
+
+---
+
+#### ErrReplayDetected
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 409 |
+| **Message** | Replay attack detected |
+| **Hint** | Include unique nonce and current timestamp in request |
+| **DocsURL** | https://a2a-sentinel.dev/docs/replay |
+
+**When it occurs:**
+- Same request is sent multiple times (detected via nonce)
+- Replay protection is enabled
+- Timestamp is too old (request replay from past)
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 409,
+    "message": "Replay attack detected",
+    "hint": "Include unique nonce and current timestamp in request",
+    "docs_url": "https://a2a-sentinel.dev/docs/replay"
+  }
+}
+```
+
+**How to fix:**
+1. **Use unique nonce**: Generate a unique, non-repeating identifier for each request
+   ```bash
+   NONCE=$(uuidgen)
+   curl -X POST http://localhost:8080/agents/myagent/ \
+     -H "X-Request-Nonce: $NONCE" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc": "2.0", "id": "1", ...}'
+   ```
+2. **Include timestamp**: Add current timestamp to the request
+   ```bash
+   TIMESTAMP=$(date -u +%s)
+   curl -X POST http://localhost:8080/agents/myagent/ \
+     -H "X-Request-Timestamp: $TIMESTAMP" \
+     ...
+   ```
+3. **Verify nonce uniqueness**: Never reuse the same nonce
+4. **Check timestamp freshness**: Ensure your system clock is synchronized (NTP)
+5. See [Replay Protection](../docs/SECURITY.md#replay-protection) for configuration
+
+---
+
+### Security Blocks
+
+#### ErrSSRFBlocked
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 403 |
+| **Message** | Push notification URL blocked |
+| **Hint** | URL resolves to private network. Use public URLs or configure security.push.allowed_domains |
+| **DocsURL** | https://a2a-sentinel.dev/docs/ssrf |
+
+**When it occurs:**
+- Push notification URL resolves to a private IP address (10.x, 172.16-31.x, 192.168.x, 127.x, ::1)
+- URL points to internal services that should not be accessible
+- SSRF (Server-Side Request Forgery) protection is enabled
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 403,
+    "message": "Push notification URL blocked",
+    "hint": "URL resolves to private network. Use public URLs or configure security.push.allowed_domains",
+    "docs_url": "https://a2a-sentinel.dev/docs/ssrf"
+  }
+}
+```
+
+**How to fix:**
+1. **Use public URLs**: Replace private IPs with public domains
+   ```bash
+   # Instead of: http://192.168.1.100:8080/webhook
+   # Use: https://webhook.example.com/notify
+   ```
+2. **Configure allowlist**: If you need to allow specific private URLs, add them to the allowlist in `sentinel.yaml`:
+   ```yaml
+   security:
+     push:
+       allowed_domains:
+         - "internal-webhook.example.com"
+         - "10.0.0.0/8"       # Allow entire private subnet
+   ```
+3. **Use tunneling**: If you must reach private services, use a tunnel or reverse proxy
+4. **Check DNS resolution**: Verify the URL resolves correctly:
+   ```bash
+   nslookup webhook.example.com
+   ```
+5. See [SSRF Protection](../docs/SECURITY.md#ssrf-protection) for detailed configuration
+
+---
+
+### Agent & Routing
+
+#### ErrNoRoute
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 404 |
+| **Message** | No matching agent found |
+| **Hint** | Check routing path or set a default agent |
+| **DocsURL** | https://a2a-sentinel.dev/docs/routing |
+
+**When it occurs:**
+- Request path does not match any configured agent
+- Routing mode is `single` but path is not correct
+- Routing mode is `path-prefix` but no agent matches the prefix
+- No default agent is configured
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 404,
+    "message": "No matching agent found",
+    "hint": "Check routing path or set a default agent",
+    "docs_url": "https://a2a-sentinel.dev/docs/routing"
+  }
+}
+```
+
+**How to fix:**
+1. **Check configured agents**: List your agents in `sentinel.yaml`:
+   ```yaml
+   agents:
+     - name: echo-agent
+       url: http://localhost:8001
+     - name: llm-agent
+       url: http://localhost:8002
+   ```
+2. **Verify routing mode**: Check the routing configuration:
+   ```yaml
+   routing:
+     mode: path-prefix    # or 'single'
+   ```
+3. **Use correct path**: Request the correct agent path
+   ```bash
+   # For path-prefix routing:
+   curl http://localhost:8080/agents/echo-agent/
+
+   # For single routing (no path needed):
+   curl http://localhost:8080/
+   ```
+4. **Set a default agent**: Configure a fallback for unmatched routes:
+   ```yaml
+   routing:
+     default_agent: echo-agent
+   ```
+5. **Check agent health**: Verify agents are running and registered:
+   ```bash
+   curl http://localhost:8080/readyz | jq .
+   ```
+6. See [Routing Configuration](./ARCHITECTURE.md#routing) for details
+
+---
+
+#### ErrAgentUnavailable
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 503 |
+| **Message** | Target agent unavailable |
+| **Hint** | Check agent health with GET /readyz |
+| **DocsURL** | https://a2a-sentinel.dev/docs/agents |
+
+**When it occurs:**
+- Agent is offline or not responding
+- Agent connection cannot be established
+- Agent failed health check
+- Agent is overloaded or timing out
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 503,
+    "message": "Target agent unavailable",
+    "hint": "Check agent health with GET /readyz",
+    "docs_url": "https://a2a-sentinel.dev/docs/agents"
+  }
+}
+```
+
+**How to fix:**
+1. **Check agent health**: Use the readiness endpoint
+   ```bash
+   curl http://localhost:8080/readyz | jq .
+   # Response: {"status":"ready","healthy_agents":2,"total_agents":2}
+   ```
+2. **Verify agent is running**: Check the agent's health endpoint directly
+   ```bash
+   curl http://localhost:8001/healthz
+   ```
+3. **Check connectivity**: Verify sentinel can reach the agent
+   ```bash
+   # From sentinel container
+   curl http://agent-host:8001/
+   ```
+4. **Review logs**: Check sentinel and agent logs for errors
+   ```bash
+   docker compose logs sentinel
+   docker compose logs echo-agent
+   ```
+5. **Check configuration**: Ensure agent URL is correct in `sentinel.yaml`:
+   ```yaml
+   agents:
+     - name: echo-agent
+       url: http://echo-agent:8001    # Verify hostname/port
+   ```
+6. **Retry with backoff**: Implement client-side retry logic for transient failures
+7. See [Agent Configuration](./ARCHITECTURE.md#agent-configuration) for setup
+
+---
+
+### Gateway Limits
+
+#### ErrGlobalLimitReached
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 503 |
+| **Message** | Gateway capacity reached |
+| **Hint** | Gateway is at maximum connections. Try again shortly |
+| **DocsURL** | https://a2a-sentinel.dev/docs/limits |
+
+**When it occurs:**
+- Total concurrent connections to sentinel exceed the configured limit
+- Too many requests are queued
+- System resources are exhausted
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 503,
+    "message": "Gateway capacity reached",
+    "hint": "Gateway is at maximum connections. Try again shortly",
+    "docs_url": "https://a2a-sentinel.dev/docs/limits"
+  }
+}
+```
+
+**How to fix:**
+1. **Increase connection limit**: Adjust in `sentinel.yaml`:
+   ```yaml
+   listen:
+     max_connections: 1000   # Increase from default 500
+   ```
+2. **Scale horizontally**: Run multiple sentinel instances behind a load balancer
+   ```bash
+   docker compose up -d --scale sentinel=3
+   ```
+3. **Reduce connection duration**: Ensure clients close connections promptly
+   ```bash
+   # Add connection timeout
+   curl --max-time 30 http://localhost:8080/agents/myagent/
+   ```
+4. **Monitor usage**: Track active connections
+   ```bash
+   # Check via MCP server (read-only)
+   curl http://localhost:9999/connections
+   ```
+5. **Optimize agent responses**: Faster agent responses free up connections sooner
+6. See [Gateway Configuration](./ARCHITECTURE.md#gateway-configuration) for tuning
+
+---
+
+## JSON-RPC Error Code Mapping
+
+When a SentinelError is converted to a JSON-RPC error response, the HTTP status code is mapped to a JSON-RPC error code:
+
+| HTTP Status | JSON-RPC Code | JSON-RPC Meaning | Examples |
+|---|---|---|---|
+| 400 | -32600 | Invalid Request | ErrInvalidRequest |
+| 401 | -32600 | Invalid Request | ErrAuthRequired, ErrAuthInvalid |
+| 403 | -32600 | Invalid Request | ErrForbidden, ErrSSRFBlocked |
+| 404 | -32601 | Method not found | ErrNoRoute |
+| 409 | -32600 | Invalid Request | ErrReplayDetected |
+| 429 | -32600 | Invalid Request | ErrRateLimited, ErrStreamLimitExceeded |
+| 503 | -32603 | Internal error | ErrAgentUnavailable, ErrGlobalLimitReached |
+
+**Note:** The original HTTP code is preserved in the `data.code` field of the JSON-RPC error response, allowing clients to make decisions based on the actual HTTP status.
+
+---
+
+## Error Handling Best Practices
+
+### Client Implementation
+
+**Implement exponential backoff for transient errors:**
+```go
+import "time"
+
+func sendWithRetry(ctx context.Context, req *http.Request, maxRetries int) (*http.Response, error) {
+    for i := 0; i < maxRetries; i++ {
+        resp, err := http.DefaultClient.Do(req)
+        if err != nil {
+            return nil, err
+        }
+
+        // Success
+        if resp.StatusCode < 400 {
+            return resp, nil
+        }
+
+        // Transient errors: 429 (rate limited), 503 (unavailable)
+        if resp.StatusCode == 429 || resp.StatusCode == 503 {
+            backoff := time.Duration(math.Pow(2, float64(i))) * time.Second
+            select {
+            case <-time.After(backoff):
+                continue
+            case <-ctx.Done():
+                return nil, ctx.Err()
+            }
+        }
+
+        // Permanent errors: 400, 401, 403, 404
+        return resp, fmt.Errorf("request failed: %d", resp.StatusCode)
+    }
+    return nil, fmt.Errorf("max retries exceeded")
+}
+```
+
+### Displaying Educational Messages
+
+**Extract and display hints to users:**
+```go
+type SentinelError struct {
+    Code    int    `json:"code"`
+    Message string `json:"message"`
+    Hint    string `json:"hint"`
+    DocsURL string `json:"docs_url"`
+}
+
+func handleError(respBody []byte) {
+    var errResp struct {
+        Error SentinelError `json:"error"`
+    }
+    if err := json.Unmarshal(respBody, &errResp); err != nil {
+        log.Fatalf("Failed to parse error: %v", err)
+    }
+
+    // Display user-friendly message with hint
+    fmt.Printf("Error: %s\n", errResp.Error.Message)
+    if errResp.Error.Hint != "" {
+        fmt.Printf("Tip: %s\n", errResp.Error.Hint)
+    }
+    if errResp.Error.DocsURL != "" {
+        fmt.Printf("Learn more: %s\n", errResp.Error.DocsURL)
+    }
+}
+```
+
+### Logging & Debugging
+
+**Log errors with context:**
+```go
+import "log/slog"
+
+slog.Error("request failed",
+    "code", errResp.Error.Code,
+    "message", errResp.Error.Message,
+    "hint", errResp.Error.Hint,
+    "url", errResp.Error.DocsURL,
+)
+```
+
+---
+
+## Configuration Reference
+
+### Rate Limiting
+
+```yaml
+security:
+  rate_limit:
+    ip:
+      per_minute: 100        # Requests per minute per IP address
+    user:
+      per_minute: 500        # Requests per minute per authenticated user
+```
+
+### Connection Limits
+
+```yaml
+listen:
+  max_connections: 500       # Maximum concurrent connections
+  max_body_size: 1MB         # Maximum request body size
+```
+
+### Agent Streaming
+
+```yaml
+agents:
+  - name: myagent
+    url: http://agent:8000
+    max_streams: 100         # Maximum concurrent SSE streams
+```
+
+### SSRF Protection
+
+```yaml
+security:
+  push:
+    allowed_domains:
+      - "webhook.example.com"
+      - "10.0.0.0/8"
+      - "fd00::/8"           # IPv6 private
+```
+
+---
+
+## Related Documentation
+
+- **[SECURITY.md](./SECURITY.md)** — Security configuration, authentication, rate limiting
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Architecture, protocol details, configuration schema
+- **[README.md](../README.md)** — Quick start guide and feature overview
+- **[A2A Protocol](https://a2a.dev)** — Official Agent-to-Agent protocol specification

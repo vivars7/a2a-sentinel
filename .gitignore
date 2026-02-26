@@ -1,0 +1,34 @@
+# Binaries
+sentinel
+bin/
+*.exe
+
+# Test
+*.out
+coverage.html
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Config (actual configs, not examples)
+sentinel.yaml
+.env
+
+# oh-my-claudecode state
+.omc/
+
+# Temp
+tmp/
