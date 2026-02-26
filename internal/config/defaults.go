@@ -69,8 +69,7 @@ func ApplyDefaults(cfg *Config) {
 	applyRateLimitDefaults(&cfg.Security.RateLimit)
 
 	// ── Security: Push ──
-	// block_private_networks, require_https, require_challenge default to true.
-	// Handled via profiles (Security ON by Default).
+	applyPushDefaults(&cfg.Security.Push)
 
 	// ── Body Inspection ──
 	if cfg.BodyInspection.MaxSize == 0 {
@@ -165,6 +164,18 @@ func applyRateLimitDefaults(rl *RateLimitConfig) {
 	}
 	if rl.PerAgent == 0 {
 		rl.PerAgent = 500
+	}
+}
+
+func applyPushDefaults(p *PushConfig) {
+	// Security ON by Default: block private networks and require HTTPS.
+	// Security ON by Default: apply defaults when user has not configured push settings.
+	// Since Go bool zero-value is false and our default is true, we check if the struct
+	// appears unconfigured (no domains, no secret, all bools false) and set secure defaults.
+	if !p.BlockPrivateNetworks && !p.RequireHTTPS && !p.RequireChallenge && len(p.AllowedDomains) == 0 && p.HMACSecret == "" {
+		p.BlockPrivateNetworks = true
+		p.RequireHTTPS = true
+		p.RequireChallenge = true
 	}
 }
 

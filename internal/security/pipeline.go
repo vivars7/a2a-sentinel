@@ -2,12 +2,16 @@
 //
 // Layer 1 (Pre-Auth): GlobalRateLimiter, IPRateLimiter
 // Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter
-// Stubs (v0.2): JWSVerifier, ReplayDetector, SSRFChecker
+// Post-Auth: SSRFChecker (push notification URL validation)
+// Stubs (v0.2): JWSVerifier, ReplayDetector
 package security
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/vivars7/a2a-sentinel/internal/config"
 )
 
 // Middleware is a security processing step in the pipeline.
@@ -22,6 +26,8 @@ type SecurityPipelineConfig struct {
 	RateLimit       RateLimitPipelineConfig
 	GlobalRateLimit int
 	TrustedProxies  []string
+	Push            config.PushConfig
+	Logger          *slog.Logger
 }
 
 // AuthPipelineConfig holds authentication configuration.
@@ -47,8 +53,8 @@ type RateLimitPipelineConfig struct {
 
 // BuildPipeline constructs the ordered security middleware chain.
 // Layer 1 (Pre-Auth): GlobalRateLimiter, IPRateLimiter
-// Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter
-// Stubs (v0.2): JWSVerifier, ReplayDetector, SSRFChecker
+// Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter, SSRFChecker
+// Stubs (v0.2): JWSVerifier, ReplayDetector
 func BuildPipeline(cfg SecurityPipelineConfig) []Middleware {
 	var mws []Middleware
 
@@ -77,10 +83,12 @@ func BuildPipeline(cfg SecurityPipelineConfig) []Middleware {
 		))
 	}
 
-	// v0.2 stubs (always pass through)
+	// v0.2 stubs
 	mws = append(mws, NewJWSVerifier())
 	mws = append(mws, NewReplayDetector())
-	mws = append(mws, NewSSRFChecker())
+
+	// SSRF protection for push notification URLs
+	mws = append(mws, NewSSRFChecker(cfg.Push, cfg.Logger))
 
 	return mws
 }

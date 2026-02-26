@@ -418,6 +418,8 @@ func (s *Server) buildSecurityPipelineConfig() security.SecurityPipelineConfig {
 		},
 		GlobalRateLimit: s.cfg.Listen.GlobalRateLimit,
 		TrustedProxies:  s.cfg.Listen.TrustedProxies,
+		Push:            s.cfg.Security.Push,
+		Logger:          s.logger,
 	}
 
 	// Add JWT config if in terminate mode
