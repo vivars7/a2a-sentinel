@@ -1,15 +1,30 @@
-// Package mcpserver implements a read-only MCP server for gateway management.
+// Package mcpserver implements an MCP server for gateway management.
 // It exposes sentinel internal state over a local-only JSON-RPC endpoint.
 package mcpserver
 
 import "time"
 
-// SentinelBridge provides read-only access to sentinel internal state.
+// SentinelBridge provides access to sentinel internal state.
 // Implementation is provided by the server package.
 type SentinelBridge interface {
+	// Read methods
 	ListAgents() []AgentStatus
 	HealthCheck() SystemHealth
 	GetBlockedRequests(since time.Time, limit int) []BlockedRequest
+	GetAgentCard(name string) (map[string]interface{}, error)
+	GetAggregatedCard() (map[string]interface{}, error)
+	GetRateLimitStatus() []RateLimitStatus
+
+	// Write methods
+	UpdateRateLimit(agentName string, perMinute int) (previous int, err error)
+	RegisterAgent(name, url string, isDefault bool) error
+	DeregisterAgent(name string) error
+	SendTestMessage(agentName, text string) (*TestResult, error)
+
+	// Resource methods
+	GetConfig() map[string]interface{}
+	GetMetrics() map[string]interface{}
+	GetSecurityReport() map[string]interface{}
 }
 
 // AgentStatus describes the current status of a backend A2A agent.
@@ -36,4 +51,19 @@ type BlockedRequest struct {
 	Method      string    `json:"method"`
 	BlockReason string    `json:"block_reason"`
 	Agent       string    `json:"agent,omitempty"`
+}
+
+// RateLimitStatus describes the current rate-limit state for a single agent.
+type RateLimitStatus struct {
+	Agent      string `json:"agent"`
+	CurrentRPM int    `json:"current_rpm"`
+	LimitRPM   int    `json:"limit_rpm"`
+	Remaining  int    `json:"remaining"`
+}
+
+// TestResult holds the outcome of sending a test message to an agent.
+type TestResult struct {
+	TaskID       string `json:"task_id"`
+	Status       string `json:"status"`
+	ResponseText string `json:"response_text"`
 }

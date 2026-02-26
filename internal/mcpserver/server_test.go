@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net"
@@ -30,6 +31,30 @@ type mockBridge struct {
 	agents          []AgentStatus
 	health          SystemHealth
 	blockedRequests []BlockedRequest
+
+	// New read fields
+	agentCards    map[string]map[string]interface{}
+	aggregatedCard map[string]interface{}
+	rateLimits    []RateLimitStatus
+
+	// Write tracking
+	registeredAgents   map[string]string // name -> url
+	deregisteredAgents []string
+	updatedRateLimits  map[string]int // agent -> perMinute
+	testResults        map[string]*TestResult
+
+	// Resource fields
+	config         map[string]interface{}
+	metrics        map[string]interface{}
+	securityReport map[string]interface{}
+
+	// Error injection
+	getAgentCardErr    error
+	getAggregatedErr   error
+	updateRateLimitErr error
+	registerAgentErr   error
+	deregisterAgentErr error
+	sendTestMsgErr     error
 }
 
 func (m *mockBridge) ListAgents() []AgentStatus { return m.agents }
@@ -39,6 +64,90 @@ func (m *mockBridge) GetBlockedRequests(_ time.Time, limit int) []BlockedRequest
 		return m.blockedRequests[:limit]
 	}
 	return m.blockedRequests
+}
+
+func (m *mockBridge) GetAgentCard(name string) (map[string]interface{}, error) {
+	if m.getAgentCardErr != nil {
+		return nil, m.getAgentCardErr
+	}
+	card, ok := m.agentCards[name]
+	if !ok {
+		return nil, fmt.Errorf("agent %q not found", name)
+	}
+	return card, nil
+}
+
+func (m *mockBridge) GetAggregatedCard() (map[string]interface{}, error) {
+	if m.getAggregatedErr != nil {
+		return nil, m.getAggregatedErr
+	}
+	return m.aggregatedCard, nil
+}
+
+func (m *mockBridge) GetRateLimitStatus() []RateLimitStatus {
+	return m.rateLimits
+}
+
+func (m *mockBridge) UpdateRateLimit(agentName string, perMinute int) (int, error) {
+	if m.updateRateLimitErr != nil {
+		return 0, m.updateRateLimitErr
+	}
+	previous := 60 // default previous
+	if m.updatedRateLimits == nil {
+		m.updatedRateLimits = make(map[string]int)
+	}
+	if prev, ok := m.updatedRateLimits[agentName]; ok {
+		previous = prev
+	}
+	m.updatedRateLimits[agentName] = perMinute
+	return previous, nil
+}
+
+func (m *mockBridge) RegisterAgent(name, url string, isDefault bool) error {
+	if m.registerAgentErr != nil {
+		return m.registerAgentErr
+	}
+	if m.registeredAgents == nil {
+		m.registeredAgents = make(map[string]string)
+	}
+	m.registeredAgents[name] = url
+	return nil
+}
+
+func (m *mockBridge) DeregisterAgent(name string) error {
+	if m.deregisterAgentErr != nil {
+		return m.deregisterAgentErr
+	}
+	m.deregisteredAgents = append(m.deregisteredAgents, name)
+	return nil
+}
+
+func (m *mockBridge) SendTestMessage(agentName, text string) (*TestResult, error) {
+	if m.sendTestMsgErr != nil {
+		return nil, m.sendTestMsgErr
+	}
+	if m.testResults != nil {
+		if r, ok := m.testResults[agentName]; ok {
+			return r, nil
+		}
+	}
+	return &TestResult{
+		TaskID:       "test-task-001",
+		Status:       "completed",
+		ResponseText: "echo: " + text,
+	}, nil
+}
+
+func (m *mockBridge) GetConfig() map[string]interface{} {
+	return m.config
+}
+
+func (m *mockBridge) GetMetrics() map[string]interface{} {
+	return m.metrics
+}
+
+func (m *mockBridge) GetSecurityReport() map[string]interface{} {
+	return m.securityReport
 }
 
 // blockingBridge blocks ListAgents until blockCh is closed. Used to simulate
@@ -53,12 +162,23 @@ func (b *blockingBridge) ListAgents() []AgentStatus {
 }
 func (b *blockingBridge) HealthCheck() SystemHealth                          { return SystemHealth{} }
 func (b *blockingBridge) GetBlockedRequests(_ time.Time, _ int) []BlockedRequest { return nil }
+func (b *blockingBridge) GetAgentCard(_ string) (map[string]interface{}, error) {
+	return nil, nil
+}
+func (b *blockingBridge) GetAggregatedCard() (map[string]interface{}, error) { return nil, nil }
+func (b *blockingBridge) GetRateLimitStatus() []RateLimitStatus              { return nil }
+func (b *blockingBridge) UpdateRateLimit(_ string, _ int) (int, error)       { return 0, nil }
+func (b *blockingBridge) RegisterAgent(_, _ string, _ bool) error            { return nil }
+func (b *blockingBridge) DeregisterAgent(_ string) error                     { return nil }
+func (b *blockingBridge) SendTestMessage(_, _ string) (*TestResult, error)   { return nil, nil }
+func (b *blockingBridge) GetConfig() map[string]interface{}                  { return nil }
+func (b *blockingBridge) GetMetrics() map[string]interface{}                 { return nil }
+func (b *blockingBridge) GetSecurityReport() map[string]interface{}          { return nil }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-func newTestServer(t *testing.T, token string) (*Server, *httptest.Server) {
-	t.Helper()
-	bridge := &mockBridge{
+func defaultMockBridge() *mockBridge {
+	return &mockBridge{
 		agents: []AgentStatus{
 			{Name: "agent-a", URL: "http://a.example.com", Healthy: true, SkillCount: 3},
 			{Name: "agent-b", URL: "http://b.example.com", Healthy: false, SkillCount: 1},
@@ -77,7 +197,45 @@ func newTestServer(t *testing.T, token string) (*Server, *httptest.Server) {
 				Agent:       "agent-a",
 			},
 		},
+		agentCards: map[string]map[string]interface{}{
+			"agent-a": {
+				"name":        "agent-a",
+				"url":         "http://a.example.com",
+				"description": "Test agent A",
+				"skills":      []string{"skill1", "skill2"},
+			},
+		},
+		aggregatedCard: map[string]interface{}{
+			"name":        "a2a-sentinel",
+			"description": "Aggregated gateway card",
+			"agents":      2,
+		},
+		rateLimits: []RateLimitStatus{
+			{Agent: "agent-a", CurrentRPM: 10, LimitRPM: 60, Remaining: 50},
+			{Agent: "agent-b", CurrentRPM: 0, LimitRPM: 30, Remaining: 30},
+		},
+		config: map[string]interface{}{
+			"host":  "127.0.0.1",
+			"port":  8080,
+			"token": "***",
+		},
+		metrics: map[string]interface{}{
+			"total_requests": 1000,
+			"total_blocked":  42,
+			"active_streams": 5,
+			"uptime":         "2h0m0s",
+		},
+		securityReport: map[string]interface{}{
+			"auth_mode":           "bearer",
+			"rate_limit_enabled":  true,
+			"recent_blocks_count": 3,
+		},
 	}
+}
+
+func newTestServer(t *testing.T, token string) (*Server, *httptest.Server) {
+	t.Helper()
+	bridge := defaultMockBridge()
 
 	logger := newNopLogger()
 	srv := NewServer(Config{Host: "127.0.0.1", Port: 0, Token: token}, bridge, logger)
@@ -117,6 +275,27 @@ func postRPC(t *testing.T, url string, req jsonRPCRequest, token string) jsonRPC
 	return rpcResp
 }
 
+// extractToolText extracts the text content from a tool result response.
+func extractToolText(t *testing.T, resp jsonRPCResponse) string {
+	t.Helper()
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	content, ok := result["content"].([]interface{})
+	if !ok {
+		t.Fatalf("expected content slice, got %T", result["content"])
+	}
+	if len(content) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(content))
+	}
+	item := content[0].(map[string]interface{})
+	if item["type"] != "text" {
+		t.Errorf("expected type=text, got %q", item["type"])
+	}
+	return item["text"].(string)
+}
+
 // ── initialize ────────────────────────────────────────────────────────────────
 
 func TestInitialize_ReturnsServerInfo(t *testing.T) {
@@ -142,6 +321,9 @@ func TestInitialize_ReturnsServerInfo(t *testing.T) {
 	}
 	if info["name"] != "a2a-sentinel" {
 		t.Errorf("expected name=a2a-sentinel, got %q", info["name"])
+	}
+	if info["version"] != "0.2.0" {
+		t.Errorf("expected version=0.2.0, got %q", info["version"])
 	}
 }
 
@@ -183,9 +365,30 @@ func TestInitialize_HasToolsCapability(t *testing.T) {
 	}
 }
 
+func TestInitialize_HasResourcesCapability(t *testing.T) {
+	_, srv := newTestServer(t, "")
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+	}, "")
+
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	caps, ok := result["capabilities"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected capabilities map, got %T", result["capabilities"])
+	}
+	if _, hasResources := caps["resources"]; !hasResources {
+		t.Error("expected capabilities.resources to be present")
+	}
+}
+
 // ── tools/list ────────────────────────────────────────────────────────────────
 
-func TestToolsList_ReturnsThreeTools(t *testing.T) {
+func TestToolsList_ReturnsTenTools(t *testing.T) {
 	_, srv := newTestServer(t, "")
 	resp := postRPC(t, srv.URL, jsonRPCRequest{
 		JSONRPC: "2.0",
@@ -205,8 +408,8 @@ func TestToolsList_ReturnsThreeTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tools slice, got %T", result["tools"])
 	}
-	if len(tools) != 3 {
-		t.Errorf("expected 3 tools, got %d", len(tools))
+	if len(tools) != 10 {
+		t.Errorf("expected 10 tools, got %d", len(tools))
 	}
 }
 
@@ -225,6 +428,13 @@ func TestToolsList_ToolNamesCorrect(t *testing.T) {
 		"list_agents":          false,
 		"health_check":         false,
 		"get_blocked_requests": false,
+		"get_agent_card":       false,
+		"get_aggregated_card":  false,
+		"get_rate_limit_status": false,
+		"update_rate_limit":    false,
+		"register_agent":       false,
+		"deregister_agent":     false,
+		"send_test_message":    false,
 	}
 	for _, t2 := range tools {
 		tool := t2.(map[string]interface{})
@@ -255,19 +465,9 @@ func TestToolsCall_ListAgents_ReturnsAgents(t *testing.T) {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 
-	result := resp.Result.(map[string]interface{})
-	content := result["content"].([]interface{})
-	if len(content) != 1 {
-		t.Fatalf("expected 1 content item, got %d", len(content))
-	}
-
-	item := content[0].(map[string]interface{})
-	if item["type"] != "text" {
-		t.Errorf("expected type=text, got %q", item["type"])
-	}
-
+	text := extractToolText(t, resp)
 	var agents []AgentStatus
-	if err := json.Unmarshal([]byte(item["text"].(string)), &agents); err != nil {
+	if err := json.Unmarshal([]byte(text), &agents); err != nil {
 		t.Fatalf("unmarshal agents: %v", err)
 	}
 	if len(agents) != 2 {
@@ -295,12 +495,9 @@ func TestToolsCall_HealthCheck_ReturnsHealth(t *testing.T) {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 
-	result := resp.Result.(map[string]interface{})
-	content := result["content"].([]interface{})
-	item := content[0].(map[string]interface{})
-
+	text := extractToolText(t, resp)
 	var health SystemHealth
-	if err := json.Unmarshal([]byte(item["text"].(string)), &health); err != nil {
+	if err := json.Unmarshal([]byte(text), &health); err != nil {
 		t.Fatalf("unmarshal health: %v", err)
 	}
 	if health.Status != "healthy" {
@@ -328,12 +525,9 @@ func TestToolsCall_GetBlockedRequests_NoParams(t *testing.T) {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 
-	result := resp.Result.(map[string]interface{})
-	content := result["content"].([]interface{})
-	item := content[0].(map[string]interface{})
-
+	text := extractToolText(t, resp)
 	var blocked []BlockedRequest
-	if err := json.Unmarshal([]byte(item["text"].(string)), &blocked); err != nil {
+	if err := json.Unmarshal([]byte(text), &blocked); err != nil {
 		t.Fatalf("unmarshal blocked: %v", err)
 	}
 	if len(blocked) != 1 {
@@ -342,12 +536,11 @@ func TestToolsCall_GetBlockedRequests_NoParams(t *testing.T) {
 }
 
 func TestToolsCall_GetBlockedRequests_WithLimit(t *testing.T) {
-	bridge := &mockBridge{
-		blockedRequests: []BlockedRequest{
-			{ClientIP: "1.1.1.1", BlockReason: "rate_limit"},
-			{ClientIP: "2.2.2.2", BlockReason: "auth_failed"},
-			{ClientIP: "3.3.3.3", BlockReason: "ssrf_blocked"},
-		},
+	bridge := defaultMockBridge()
+	bridge.blockedRequests = []BlockedRequest{
+		{ClientIP: "1.1.1.1", BlockReason: "rate_limit"},
+		{ClientIP: "2.2.2.2", BlockReason: "auth_failed"},
+		{ClientIP: "3.3.3.3", BlockReason: "ssrf_blocked"},
 	}
 	logger := newNopLogger()
 	mcpSrv := NewServer(Config{Host: "127.0.0.1", Port: 0}, bridge, logger)
@@ -378,12 +571,9 @@ func TestToolsCall_GetBlockedRequests_WithLimit(t *testing.T) {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 
-	result := resp.Result.(map[string]interface{})
-	content := result["content"].([]interface{})
-	item := content[0].(map[string]interface{})
-
+	text := extractToolText(t, resp)
 	var blocked []BlockedRequest
-	if err := json.Unmarshal([]byte(item["text"].(string)), &blocked); err != nil {
+	if err := json.Unmarshal([]byte(text), &blocked); err != nil {
 		t.Fatalf("unmarshal blocked: %v", err)
 	}
 	if len(blocked) != 2 {
@@ -444,6 +634,477 @@ func TestToolsCall_GetBlockedRequests_InvalidSince(t *testing.T) {
 
 	if resp.Error == nil {
 		t.Fatal("expected error for invalid since timestamp, got nil")
+	}
+}
+
+// ── tools/call: get_agent_card ───────────────────────────────────────────────
+
+func TestToolsCall_GetAgentCard_ReturnsCard(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "get_agent_card",
+		"arguments": map[string]string{"agent_name": "agent-a"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      20,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var card map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &card); err != nil {
+		t.Fatalf("unmarshal card: %v", err)
+	}
+	if card["name"] != "agent-a" {
+		t.Errorf("expected card name=agent-a, got %q", card["name"])
+	}
+}
+
+func TestToolsCall_GetAgentCard_MissingName_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "get_agent_card",
+		"arguments": map[string]string{},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      21,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing agent_name, got nil")
+	}
+}
+
+func TestToolsCall_GetAgentCard_NotFound_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "get_agent_card",
+		"arguments": map[string]string{"agent_name": "nonexistent"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      22,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for nonexistent agent, got nil")
+	}
+}
+
+// ── tools/call: get_aggregated_card ──────────────────────────────────────────
+
+func TestToolsCall_GetAggregatedCard_ReturnsCard(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name": "get_aggregated_card",
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      23,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var card map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &card); err != nil {
+		t.Fatalf("unmarshal card: %v", err)
+	}
+	if card["name"] != "a2a-sentinel" {
+		t.Errorf("expected name=a2a-sentinel, got %q", card["name"])
+	}
+}
+
+// ── tools/call: get_rate_limit_status ────────────────────────────────────────
+
+func TestToolsCall_GetRateLimitStatus_ReturnsStatuses(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name": "get_rate_limit_status",
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      24,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var statuses []RateLimitStatus
+	if err := json.Unmarshal([]byte(text), &statuses); err != nil {
+		t.Fatalf("unmarshal statuses: %v", err)
+	}
+	if len(statuses) != 2 {
+		t.Errorf("expected 2 rate limit statuses, got %d", len(statuses))
+	}
+	if statuses[0].Agent != "agent-a" {
+		t.Errorf("expected first agent=agent-a, got %q", statuses[0].Agent)
+	}
+}
+
+// ── tools/call: update_rate_limit ────────────────────────────────────────────
+
+func TestToolsCall_UpdateRateLimit_ReturnsResult(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "update_rate_limit",
+		"arguments": map[string]interface{}{"agent_name": "agent-a", "per_minute": 120},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      30,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result["updated"] != float64(120) {
+		t.Errorf("expected updated=120, got %v", result["updated"])
+	}
+}
+
+func TestToolsCall_UpdateRateLimit_MissingAgent_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "update_rate_limit",
+		"arguments": map[string]interface{}{"per_minute": 120},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      31,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing agent_name, got nil")
+	}
+}
+
+func TestToolsCall_UpdateRateLimit_InvalidPerMinute_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "update_rate_limit",
+		"arguments": map[string]interface{}{"agent_name": "agent-a", "per_minute": 0},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      32,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for per_minute=0, got nil")
+	}
+}
+
+// ── tools/call: register_agent ───────────────────────────────────────────────
+
+func TestToolsCall_RegisterAgent_ReturnsResult(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "register_agent",
+		"arguments": map[string]interface{}{"name": "new-agent", "url": "http://new.example.com", "default": true},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      33,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result["registered"] != true {
+		t.Errorf("expected registered=true, got %v", result["registered"])
+	}
+}
+
+func TestToolsCall_RegisterAgent_MissingName_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "register_agent",
+		"arguments": map[string]interface{}{"url": "http://new.example.com"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      34,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing name, got nil")
+	}
+}
+
+func TestToolsCall_RegisterAgent_MissingURL_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "register_agent",
+		"arguments": map[string]interface{}{"name": "new-agent"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      35,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing url, got nil")
+	}
+}
+
+// ── tools/call: deregister_agent ─────────────────────────────────────────────
+
+func TestToolsCall_DeregisterAgent_ReturnsResult(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "deregister_agent",
+		"arguments": map[string]interface{}{"name": "agent-a"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      36,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result["removed"] != true {
+		t.Errorf("expected removed=true, got %v", result["removed"])
+	}
+}
+
+func TestToolsCall_DeregisterAgent_MissingName_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "deregister_agent",
+		"arguments": map[string]interface{}{},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      37,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing name, got nil")
+	}
+}
+
+// ── tools/call: send_test_message ────────────────────────────────────────────
+
+func TestToolsCall_SendTestMessage_ReturnsResult(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "send_test_message",
+		"arguments": map[string]interface{}{"agent_name": "agent-a", "text": "hello"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      38,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var result TestResult
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Errorf("expected status=completed, got %q", result.Status)
+	}
+	if result.ResponseText != "echo: hello" {
+		t.Errorf("expected response_text='echo: hello', got %q", result.ResponseText)
+	}
+}
+
+func TestToolsCall_SendTestMessage_MissingAgent_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "send_test_message",
+		"arguments": map[string]interface{}{"text": "hello"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      39,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing agent_name, got nil")
+	}
+}
+
+func TestToolsCall_SendTestMessage_MissingText_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "send_test_message",
+		"arguments": map[string]interface{}{"agent_name": "agent-a"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      40,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing text, got nil")
+	}
+}
+
+// ── write tools: auth required ───────────────────────────────────────────────
+
+func TestWriteTool_NoTokenConfigured_Rejected(t *testing.T) {
+	// Server with no token configured — write tools should be rejected.
+	_, srv := newTestServer(t, "")
+
+	writeTools := []string{
+		"update_rate_limit",
+		"register_agent",
+		"deregister_agent",
+		"send_test_message",
+	}
+
+	for _, tool := range writeTools {
+		t.Run(tool, func(t *testing.T) {
+			rawArgs, _ := json.Marshal(map[string]interface{}{
+				"name":      tool,
+				"arguments": map[string]interface{}{},
+			})
+
+			resp := postRPC(t, srv.URL, jsonRPCRequest{
+				JSONRPC: "2.0",
+				ID:      50,
+				Method:  "tools/call",
+				Params:  rawArgs,
+			}, "")
+
+			if resp.Error == nil {
+				t.Fatalf("expected error for write tool %q without token configured, got nil", tool)
+			}
+			if resp.Error.Code != -32001 {
+				t.Errorf("expected code -32001, got %d", resp.Error.Code)
+			}
+			if !strings.Contains(resp.Error.Message, "MCP auth token required") {
+				t.Errorf("expected auth token error message, got %q", resp.Error.Message)
+			}
+		})
+	}
+}
+
+func TestReadTool_NoTokenConfigured_Allowed(t *testing.T) {
+	// Server with no token — read tools should still work.
+	_, srv := newTestServer(t, "")
+
+	readTools := []string{
+		"list_agents",
+		"health_check",
+		"get_rate_limit_status",
+	}
+
+	for _, tool := range readTools {
+		t.Run(tool, func(t *testing.T) {
+			rawArgs, _ := json.Marshal(map[string]interface{}{
+				"name": tool,
+			})
+
+			resp := postRPC(t, srv.URL, jsonRPCRequest{
+				JSONRPC: "2.0",
+				ID:      51,
+				Method:  "tools/call",
+				Params:  rawArgs,
+			}, "")
+
+			if resp.Error != nil {
+				t.Fatalf("unexpected error for read tool %q: %+v", tool, resp.Error)
+			}
+		})
 	}
 }
 
@@ -856,5 +1517,266 @@ func TestStart_ServeNonClosedError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mcp server error") {
 		t.Errorf("expected 'mcp server error', got: %v", err)
+	}
+}
+
+// ── resources/list ────────────────────────────────────────────────────────────
+
+func TestResourcesList_ReturnsFourResources(t *testing.T) {
+	_, srv := newTestServer(t, "")
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      60,
+		Method:  "resources/list",
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	resources, ok := result["resources"].([]interface{})
+	if !ok {
+		t.Fatalf("expected resources slice, got %T", result["resources"])
+	}
+	if len(resources) != 4 {
+		t.Errorf("expected 4 resources, got %d", len(resources))
+	}
+}
+
+func TestResourcesList_ContainsExpectedURIs(t *testing.T) {
+	_, srv := newTestServer(t, "")
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      61,
+		Method:  "resources/list",
+	}, "")
+
+	result := resp.Result.(map[string]interface{})
+	resources := result["resources"].([]interface{})
+
+	wantURIs := map[string]bool{
+		"sentinel://config":          false,
+		"sentinel://metrics":         false,
+		"sentinel://agents/{name}":   false,
+		"sentinel://security/report": false,
+	}
+	for _, r := range resources {
+		res := r.(map[string]interface{})
+		uri := res["uri"].(string)
+		wantURIs[uri] = true
+	}
+	for uri, found := range wantURIs {
+		if !found {
+			t.Errorf("expected resource URI %q in resources/list", uri)
+		}
+	}
+}
+
+// ── resources/read ────────────────────────────────────────────────────────────
+
+func TestResourcesRead_Config(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://config"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      62,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	result := resp.Result.(map[string]interface{})
+	contents := result["contents"].([]interface{})
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(contents))
+	}
+	item := contents[0].(map[string]interface{})
+	if item["uri"] != "sentinel://config" {
+		t.Errorf("expected uri=sentinel://config, got %q", item["uri"])
+	}
+	if item["mimeType"] != "application/json" {
+		t.Errorf("expected mimeType=application/json, got %q", item["mimeType"])
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(item["text"].(string)), &config); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if config["token"] != "***" {
+		t.Errorf("expected token=***, got %q", config["token"])
+	}
+}
+
+func TestResourcesRead_Metrics(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://metrics"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      63,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	result := resp.Result.(map[string]interface{})
+	contents := result["contents"].([]interface{})
+	item := contents[0].(map[string]interface{})
+
+	var metrics map[string]interface{}
+	if err := json.Unmarshal([]byte(item["text"].(string)), &metrics); err != nil {
+		t.Fatalf("unmarshal metrics: %v", err)
+	}
+	if metrics["total_requests"] != float64(1000) {
+		t.Errorf("expected total_requests=1000, got %v", metrics["total_requests"])
+	}
+}
+
+func TestResourcesRead_SecurityReport(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://security/report"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      64,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	result := resp.Result.(map[string]interface{})
+	contents := result["contents"].([]interface{})
+	item := contents[0].(map[string]interface{})
+
+	var report map[string]interface{}
+	if err := json.Unmarshal([]byte(item["text"].(string)), &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if report["auth_mode"] != "bearer" {
+		t.Errorf("expected auth_mode=bearer, got %v", report["auth_mode"])
+	}
+}
+
+func TestResourcesRead_AgentByName(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://agents/agent-a"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      65,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	result := resp.Result.(map[string]interface{})
+	contents := result["contents"].([]interface{})
+	item := contents[0].(map[string]interface{})
+
+	var card map[string]interface{}
+	if err := json.Unmarshal([]byte(item["text"].(string)), &card); err != nil {
+		t.Fatalf("unmarshal card: %v", err)
+	}
+	if card["name"] != "agent-a" {
+		t.Errorf("expected name=agent-a, got %q", card["name"])
+	}
+}
+
+func TestResourcesRead_AgentNotFound_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://agents/nonexistent"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      66,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for nonexistent agent resource, got nil")
+	}
+}
+
+func TestResourcesRead_AgentEmptyName_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://agents/"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      67,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for empty agent name in URI, got nil")
+	}
+}
+
+func TestResourcesRead_AgentTemplateName_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://agents/{name}"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      68,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for template agent name in URI, got nil")
+	}
+}
+
+func TestResourcesRead_UnknownURI_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawParams, _ := json.Marshal(map[string]string{"uri": "sentinel://unknown"})
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      69,
+		Method:  "resources/read",
+		Params:  rawParams,
+	}, "")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for unknown resource URI, got nil")
+	}
+	if !strings.Contains(resp.Error.Message, "unknown resource URI") {
+		t.Errorf("expected unknown resource URI message, got %q", resp.Error.Message)
+	}
+}
+
+func TestResourcesRead_InvalidParams_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      70,
+		Method:  "resources/read",
+		Params:  json.RawMessage(`"not an object"`),
+	}, "")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for invalid resources/read params, got nil")
 	}
 }
