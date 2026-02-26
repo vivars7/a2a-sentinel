@@ -19,7 +19,7 @@ type Config struct {
 	Token   string // empty means no auth required
 }
 
-// Server is a read-only MCP management server bound to localhost.
+// Server is an MCP management server bound to localhost.
 type Server struct {
 	bridge     SentinelBridge
 	addr       string
@@ -170,6 +170,10 @@ func (s *Server) dispatch(req jsonRPCRequest) jsonRPCResponse {
 		return s.handleToolsList(req)
 	case "tools/call":
 		return s.handleToolsCall(req)
+	case "resources/list":
+		return s.handleResourcesList(req)
+	case "resources/read":
+		return s.handleResourcesRead(req)
 	default:
 		return jsonRPCResponse{
 			JSONRPC: "2.0",
@@ -206,8 +210,11 @@ func (s *Server) handleInitialize(req jsonRPCRequest) jsonRPCResponse {
 		ID:      req.ID,
 		Result: initializeResult{
 			ProtocolVersion: "2024-11-05",
-			ServerInfo:      serverInfo{Name: "a2a-sentinel", Version: "0.1.0"},
-			Capabilities:    map[string]any{"tools": map[string]any{}},
+			ServerInfo:      serverInfo{Name: "a2a-sentinel", Version: "0.2.0"},
+			Capabilities: map[string]any{
+				"tools":     map[string]any{},
+				"resources": map[string]any{},
+			},
 		},
 	}
 }
@@ -215,6 +222,7 @@ func (s *Server) handleInitialize(req jsonRPCRequest) jsonRPCResponse {
 // toolsList is the fixed list of tools exposed by the MCP server.
 func toolsList() []toolDefinition {
 	return []toolDefinition{
+		// Read tools
 		{
 			Name:        "list_agents",
 			Description: "List all configured backend A2A agents and their current health status.",
@@ -248,6 +256,109 @@ func toolsList() []toolDefinition {
 				},
 			},
 		},
+		{
+			Name:        "get_agent_card",
+			Description: "Retrieve the Agent Card for a specific backend agent.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Name of the agent whose card to retrieve",
+					},
+				},
+				"required": []string{"agent_name"},
+			},
+		},
+		{
+			Name:        "get_aggregated_card",
+			Description: "Retrieve the aggregated Agent Card published by the sentinel gateway.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			Name:        "get_rate_limit_status",
+			Description: "Retrieve current rate-limit status for all agents.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		// Write tools
+		{
+			Name:        "update_rate_limit",
+			Description: "Update the rate limit (requests per minute) for a specific agent.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Name of the agent to update",
+					},
+					"per_minute": map[string]any{
+						"type":        "integer",
+						"description": "New requests-per-minute limit",
+					},
+				},
+				"required": []string{"agent_name", "per_minute"},
+			},
+		},
+		{
+			Name:        "register_agent",
+			Description: "Register a new backend A2A agent with the gateway.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "Unique name for the agent",
+					},
+					"url": map[string]any{
+						"type":        "string",
+						"description": "Backend URL of the agent",
+					},
+					"default": map[string]any{
+						"type":        "boolean",
+						"description": "Whether this agent should be the default route (optional)",
+					},
+				},
+				"required": []string{"name", "url"},
+			},
+		},
+		{
+			Name:        "deregister_agent",
+			Description: "Remove a backend A2A agent from the gateway.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "Name of the agent to remove",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "send_test_message",
+			Description: "Send a test message to a specific agent and return the response.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Name of the agent to test",
+					},
+					"text": map[string]any{
+						"type":        "string",
+						"description": "Text content of the test message",
+					},
+				},
+				"required": []string{"agent_name", "text"},
+			},
+		},
 	}
 }
 
@@ -257,5 +368,136 @@ func (s *Server) handleToolsList(req jsonRPCRequest) jsonRPCResponse {
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  map[string]any{"tools": toolsList()},
+	}
+}
+
+// ── resources ────────────────────────────────────────────────────────────────
+
+// resourceDefinition describes a single MCP resource.
+type resourceDefinition struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	MimeType    string `json:"mimeType"`
+}
+
+// resourceReadParams holds the params for a resources/read request.
+type resourceReadParams struct {
+	URI string `json:"uri"`
+}
+
+// resourceContent is a single content item within a resource read result.
+type resourceContent struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType"`
+	Text     string `json:"text"`
+}
+
+// resourcesList returns the fixed list of resources exposed by the MCP server.
+func resourcesList() []resourceDefinition {
+	return []resourceDefinition{
+		{
+			URI:         "sentinel://config",
+			Name:        "Sentinel Configuration",
+			Description: "Current gateway configuration with secrets masked.",
+			MimeType:    "application/json",
+		},
+		{
+			URI:         "sentinel://metrics",
+			Name:        "Request Metrics",
+			Description: "Basic request metrics including total requests, blocked count, active streams, and uptime.",
+			MimeType:    "application/json",
+		},
+		{
+			URI:         "sentinel://agents/{name}",
+			Name:        "Agent Detail",
+			Description: "Per-agent detail including status, card, and skills. Replace {name} with agent name.",
+			MimeType:    "application/json",
+		},
+		{
+			URI:         "sentinel://security/report",
+			Name:        "Security Report",
+			Description: "Security summary including auth mode, rate limit status, and recent blocks count.",
+			MimeType:    "application/json",
+		},
+	}
+}
+
+// handleResourcesList returns the list of available resources.
+func (s *Server) handleResourcesList(req jsonRPCRequest) jsonRPCResponse {
+	return jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  map[string]any{"resources": resourcesList()},
+	}
+}
+
+// handleResourcesRead reads a specific resource by URI.
+func (s *Server) handleResourcesRead(req jsonRPCRequest) jsonRPCResponse {
+	var params resourceReadParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &rpcError{Code: -32602, Message: "invalid params: " + err.Error()},
+		}
+	}
+
+	var data interface{}
+	var err error
+
+	switch {
+	case params.URI == "sentinel://config":
+		data = s.bridge.GetConfig()
+	case params.URI == "sentinel://metrics":
+		data = s.bridge.GetMetrics()
+	case params.URI == "sentinel://security/report":
+		data = s.bridge.GetSecurityReport()
+	case strings.HasPrefix(params.URI, "sentinel://agents/"):
+		agentName := strings.TrimPrefix(params.URI, "sentinel://agents/")
+		if agentName == "" || agentName == "{name}" {
+			return jsonRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &rpcError{Code: -32602, Message: "agent name required in URI: sentinel://agents/{name}"},
+			}
+		}
+		data, err = s.bridge.GetAgentCard(agentName)
+		if err != nil {
+			return jsonRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &rpcError{Code: -32603, Message: "internal error: " + err.Error()},
+			}
+		}
+	default:
+		return jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &rpcError{Code: -32602, Message: fmt.Sprintf("unknown resource URI: %s", params.URI)},
+		}
+	}
+
+	b, err := json.Marshal(data)
+	if err != nil {
+		return jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &rpcError{Code: -32603, Message: "internal error: " + err.Error()},
+		}
+	}
+
+	return jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"contents": []resourceContent{
+				{
+					URI:      params.URI,
+					MimeType: "application/json",
+					Text:     string(b),
+				},
+			},
+		},
 	}
 }

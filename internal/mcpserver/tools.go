@@ -36,6 +36,19 @@ func textResult(v interface{}) (toolResult, error) {
 	}, nil
 }
 
+// writeToolNames lists tools that modify state and require auth.
+var writeToolNames = map[string]bool{
+	"update_rate_limit":  true,
+	"register_agent":     true,
+	"deregister_agent":   true,
+	"send_test_message":  true,
+}
+
+// isWriteTool reports whether a tool name identifies a write operation.
+func isWriteTool(name string) bool {
+	return writeToolNames[name]
+}
+
 // handleToolsCall dispatches a tools/call request to the correct tool handler.
 func (s *Server) handleToolsCall(req jsonRPCRequest) jsonRPCResponse {
 	var params toolCallParams
@@ -47,18 +60,45 @@ func (s *Server) handleToolsCall(req jsonRPCRequest) jsonRPCResponse {
 		}
 	}
 
+	// Write tools require an auth token to be configured.
+	if isWriteTool(params.Name) && s.token == "" {
+		return jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &rpcError{Code: -32001, Message: "MCP auth token required for write operations"},
+		}
+	}
+
 	var (
 		result toolResult
 		err    error
 	)
 
 	switch params.Name {
+	// Read tools
 	case "list_agents":
 		result, err = s.toolListAgents()
 	case "health_check":
 		result, err = s.toolHealthCheck()
 	case "get_blocked_requests":
 		result, err = s.toolGetBlockedRequests(params.Arguments)
+	case "get_agent_card":
+		result, err = s.toolGetAgentCard(params.Arguments)
+	case "get_aggregated_card":
+		result, err = s.toolGetAggregatedCard()
+	case "get_rate_limit_status":
+		result, err = s.toolGetRateLimitStatus()
+
+	// Write tools
+	case "update_rate_limit":
+		result, err = s.toolUpdateRateLimit(params.Arguments)
+	case "register_agent":
+		result, err = s.toolRegisterAgent(params.Arguments)
+	case "deregister_agent":
+		result, err = s.toolDeregisterAgent(params.Arguments)
+	case "send_test_message":
+		result, err = s.toolSendTestMessage(params.Arguments)
+
 	default:
 		return jsonRPCResponse{
 			JSONRPC: "2.0",
@@ -81,6 +121,8 @@ func (s *Server) handleToolsCall(req jsonRPCRequest) jsonRPCResponse {
 		Result:  result,
 	}
 }
+
+// ── read tool handlers ──────────────────────────────────────────────────────
 
 // toolListAgents calls bridge.ListAgents and returns the result.
 func (s *Server) toolListAgents() (toolResult, error) {
@@ -132,4 +174,144 @@ func (s *Server) toolGetBlockedRequests(raw json.RawMessage) (toolResult, error)
 
 	blocked := s.bridge.GetBlockedRequests(since, limit)
 	return textResult(blocked)
+}
+
+// agentCardArgs holds the arguments for get_agent_card.
+type agentCardArgs struct {
+	AgentName string `json:"agent_name"`
+}
+
+// toolGetAgentCard calls bridge.GetAgentCard for a specific agent.
+func (s *Server) toolGetAgentCard(raw json.RawMessage) (toolResult, error) {
+	var args agentCardArgs
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+		}
+	}
+	if args.AgentName == "" {
+		return toolResult{}, fmt.Errorf("agent_name is required")
+	}
+
+	card, err := s.bridge.GetAgentCard(args.AgentName)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return textResult(card)
+}
+
+// toolGetAggregatedCard calls bridge.GetAggregatedCard.
+func (s *Server) toolGetAggregatedCard() (toolResult, error) {
+	card, err := s.bridge.GetAggregatedCard()
+	if err != nil {
+		return toolResult{}, err
+	}
+	return textResult(card)
+}
+
+// toolGetRateLimitStatus calls bridge.GetRateLimitStatus.
+func (s *Server) toolGetRateLimitStatus() (toolResult, error) {
+	statuses := s.bridge.GetRateLimitStatus()
+	return textResult(statuses)
+}
+
+// ── write tool handlers ─────────────────────────────────────────────────────
+
+// updateRateLimitArgs holds the arguments for update_rate_limit.
+type updateRateLimitArgs struct {
+	AgentName string `json:"agent_name"`
+	PerMinute int    `json:"per_minute"`
+}
+
+// toolUpdateRateLimit calls bridge.UpdateRateLimit and returns old/new values.
+func (s *Server) toolUpdateRateLimit(raw json.RawMessage) (toolResult, error) {
+	var args updateRateLimitArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+	}
+	if args.AgentName == "" {
+		return toolResult{}, fmt.Errorf("agent_name is required")
+	}
+	if args.PerMinute <= 0 {
+		return toolResult{}, fmt.Errorf("per_minute must be positive")
+	}
+
+	previous, err := s.bridge.UpdateRateLimit(args.AgentName, args.PerMinute)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return textResult(map[string]int{"previous": previous, "updated": args.PerMinute})
+}
+
+// registerAgentArgs holds the arguments for register_agent.
+type registerAgentArgs struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Default bool   `json:"default,omitempty"`
+}
+
+// toolRegisterAgent calls bridge.RegisterAgent.
+func (s *Server) toolRegisterAgent(raw json.RawMessage) (toolResult, error) {
+	var args registerAgentArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+	}
+	if args.Name == "" {
+		return toolResult{}, fmt.Errorf("name is required")
+	}
+	if args.URL == "" {
+		return toolResult{}, fmt.Errorf("url is required")
+	}
+
+	if err := s.bridge.RegisterAgent(args.Name, args.URL, args.Default); err != nil {
+		return toolResult{}, err
+	}
+	return textResult(map[string]bool{"registered": true})
+}
+
+// deregisterAgentArgs holds the arguments for deregister_agent.
+type deregisterAgentArgs struct {
+	Name string `json:"name"`
+}
+
+// toolDeregisterAgent calls bridge.DeregisterAgent.
+func (s *Server) toolDeregisterAgent(raw json.RawMessage) (toolResult, error) {
+	var args deregisterAgentArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+	}
+	if args.Name == "" {
+		return toolResult{}, fmt.Errorf("name is required")
+	}
+
+	if err := s.bridge.DeregisterAgent(args.Name); err != nil {
+		return toolResult{}, err
+	}
+	return textResult(map[string]bool{"removed": true})
+}
+
+// sendTestMessageArgs holds the arguments for send_test_message.
+type sendTestMessageArgs struct {
+	AgentName string `json:"agent_name"`
+	Text      string `json:"text"`
+}
+
+// toolSendTestMessage calls bridge.SendTestMessage.
+func (s *Server) toolSendTestMessage(raw json.RawMessage) (toolResult, error) {
+	var args sendTestMessageArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+	}
+	if args.AgentName == "" {
+		return toolResult{}, fmt.Errorf("agent_name is required")
+	}
+	if args.Text == "" {
+		return toolResult{}, fmt.Errorf("text is required")
+	}
+
+	result, err := s.bridge.SendTestMessage(args.AgentName, args.Text)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return textResult(result)
 }
