@@ -150,14 +150,28 @@ Minimum prerequisites:
 
 ### Step 2: Export Your sentinel Configuration
 
-Today (v0.1), export is manual. The `sentinel migrate` tool is planned for v0.2.
-
-**For now:** Keep your `sentinel.yaml` open and refer to the [Configuration Mapping](#configuration-mapping) table.
+Use the `sentinel migrate` command to generate agentgateway-compatible configuration:
 
 ```bash
-# Print your current config for reference
-cat sentinel.yaml
+# Generate agentgateway config from your sentinel.yaml
+sentinel migrate --to agentgateway --output agentgateway.yaml
+
+# Or specify input explicitly
+sentinel migrate --to agentgateway --input sentinel.yaml --output agentgateway.yaml
 ```
+
+The output includes:
+- Helm values for agentgateway deployment
+- Agent registration manifests
+- Authentication policy CRDs
+- Rate limiting configuration
+
+**Review the output carefully.** The migration tool performs best-effort conversion. You may need to adjust:
+- Kubernetes service DNS names (e.g., `echo-agent:9000` -> `echo-agent.default.svc.cluster.local`)
+- Auth issuer/audience URLs reachable from inside the cluster
+- Rate limit policies matching your production traffic patterns
+
+You can also refer to the [Configuration Mapping](#configuration-mapping) table for manual adjustments.
 
 ### Step 3: Create agentgateway Kubernetes Resources
 
@@ -305,26 +319,85 @@ Your existing dashboards should work with minimal adjustment.
 
 ---
 
-## Migration Tool (v0.2 — Coming Soon)
+## Migration Tool
 
-In v0.2, sentinel will ship a migration helper:
+The `sentinel migrate` command converts your sentinel.yaml into agentgateway-compatible configuration. It maps sentinel concepts to their agentgateway equivalents automatically.
+
+### Usage
 
 ```bash
-# Generate agentgateway-compatible config
-sentinel migrate --to agentgateway \
-  --input sentinel.yaml \
-  --output agentgateway-values.yaml
+# Basic usage (reads sentinel.yaml from current directory)
+sentinel migrate --to agentgateway --output agentgateway.yaml
 
-# The output includes:
-# - Helm values for agentgateway
-# - K8s manifests for agents, auth, rate limits
-# - Observability integration instructions
+# Specify input file
+sentinel migrate --to agentgateway --input /path/to/sentinel.yaml --output agentgateway.yaml
 ```
 
-This is **best-effort conversion**. Review and adjust for your Kubernetes environment:
-- Update service DNS names (e.g., `echo-agent:9000` → `echo-agent.default.svc.cluster.local`)
-- Verify auth issuer/audience URLs are reachable from K8s
-- Test rate limit policies with real traffic patterns
+### Example Output
+
+Given a sentinel.yaml with two agents, JWT auth, and rate limiting:
+
+```yaml
+# Input: sentinel.yaml
+agents:
+  - name: echo
+    url: http://echo-agent:9000
+    default: true
+  - name: streaming
+    url: http://streaming-agent:9001
+
+security:
+  auth:
+    mode: jwt
+    schemes:
+      - type: bearer
+        jwt:
+          issuer: https://auth.example.com
+          audience: sentinel-api
+          jwks_url: https://auth.example.com/.well-known/jwks.json
+  rate_limit:
+    enabled: true
+    user:
+      per_user: 100
+      burst: 10
+```
+
+The migrate command produces agentgateway-compatible YAML with Agent definitions, AuthPolicy CRDs, and RateLimit configurations.
+
+### Configuration Mapping (Detailed)
+
+| sentinel Field | agentgateway Equivalent | Notes |
+|---|---|---|
+| `agents[].name` | `Agent.metadata.name` | Direct mapping |
+| `agents[].url` | `Agent.spec.backend.url` | Update to K8s DNS if needed |
+| `agents[].default` | `RoutePolicy` with catch-all | Default agent becomes fallback route |
+| `agents[].timeout` | `Agent.spec.backend.timeout` | Direct mapping |
+| `agents[].poll_interval` | `Agent.spec.healthCheck.interval` | Maps to health check interval |
+| `security.auth.mode: jwt` | `AuthPolicy.spec.jwt` | JWT config maps to AuthPolicy CRD |
+| `security.auth.schemes[].jwt.issuer` | `AuthPolicy.spec.jwt.issuer` | Direct mapping |
+| `security.auth.schemes[].jwt.audience` | `AuthPolicy.spec.jwt.audience` | Direct mapping |
+| `security.auth.schemes[].jwt.jwks_url` | `AuthPolicy.spec.jwt.jwksUri` | Direct mapping |
+| `security.rate_limit.user.per_user` | `RateLimit.spec.rateLimit.requestsPerUnit` | Maps to per-unit rate |
+| `security.rate_limit.user.burst` | `RateLimit.spec.rateLimit.burst` | Direct mapping |
+| `routing.mode: path-prefix` | `RoutePolicy` with path matching | Converted to K8s route rules |
+| `logging.format: json` | Observability config | Enable structured logging in deployment |
+
+### What the Tool Does NOT Convert
+
+The following require manual configuration in agentgateway:
+- **TLS certificates**: Managed by K8s Ingress or cert-manager
+- **SSRF protection**: Handled differently in K8s networking (NetworkPolicy)
+- **Replay prevention**: Not a standard agentgateway feature (use API gateway layer)
+- **MCP server**: agentgateway has its own management interface
+- **Metrics**: Configure Prometheus ServiceMonitor separately
+
+### Post-Migration Checklist
+
+1. Review generated YAML for correctness
+2. Update service URLs to K8s DNS format
+3. Verify JWKS endpoints are reachable from cluster
+4. Apply manifests: `kubectl apply -f agentgateway.yaml`
+5. Run verification tests (same curl commands work)
 
 ---
 
@@ -440,6 +513,9 @@ A: agentgateway is maintained by Solo.io and the Linux Foundation. Report issues
 ```bash
 # Validate your current config before migration
 ./sentinel validate --config sentinel.yaml
+
+# Generate agentgateway config
+./sentinel migrate --to agentgateway --output agentgateway.yaml
 
 # Print your config for reference (before migration)
 ./sentinel --config sentinel.yaml serve --dry-run

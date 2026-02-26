@@ -52,9 +52,9 @@ This table maps real-world threats against a2a-sentinel defenses:
 | 2 | **DoS/DDoS** | Request flooding from single IP | Per-IP rate limiting (pre-auth) | `security.rate_limit.ip.per_ip`, `listen.global_rate_limit` |
 | 3 | **User abuse** | Single authenticated user hammering the gateway | Per-user rate limiting (post-auth) | `security.rate_limit.user.per_user` |
 | 4 | **Agent Card poisoning** | Attacker modifies agent card in transit | Change detection + alert logging | `agents[].card_change_policy` |
-| 5 | **Cache poisoning** | Attacker injects malicious card during polling | JWS signature verification (v0.2) | `security.card_signature.require` |
-| 6 | **SSRF via push notifications** | Attacker tricks gateway into accessing private network | URL validation, private IP blocking | `security.push.block_private_networks` |
-| 7 | **Replay attacks** | Attacker replays old requests to trigger actions | Nonce + timestamp validation (v0.2) | `security.replay.enabled` |
+| 5 | **Cache poisoning** | Attacker injects malicious card during polling | JWS signature verification | `security.card_signature.require` |
+| 6 | **SSRF via push notifications** | Attacker tricks gateway into accessing private network | URL validation, private IP blocking, HTTPS enforcement | `security.push.block_private_networks` |
+| 7 | **Replay attacks** | Attacker replays old requests to trigger actions | Nonce + timestamp validation (warn/require policies) | `security.replay.enabled` |
 | 8 | **Man-in-middle** | Unencrypted communication with agents | TLS enforcement by default | `agents[].allow_insecure: false` |
 | 9 | **Resource exhaustion** | Too many concurrent SSE streams per agent | Per-agent stream limit | `agents[].max_streams` |
 | 10 | **Connection exhaustion** | Too many total gateway connections | Global connection limit | `listen.max_connections` |
@@ -460,9 +460,17 @@ agents:
 
 ---
 
-#### 3. approve (v0.2, planned)
+#### 3. approve
 
-**Behavior**: Store changes in pending queue. Manual approval via MCP API. Keeps old card until approved.
+**Behavior**: Store changes in pending queue. Manual approval via MCP tools. Keeps old card until approved.
+
+When a card change is detected and the policy is `approve`:
+1. New card is stored in the pending changes queue
+2. Old card remains active
+3. Audit log records pending change
+4. Operator reviews via MCP tools: `list_pending_changes`, `approve_card_change`, `reject_card_change`
+5. On approval, new card replaces the old one
+6. On rejection, pending change is discarded
 
 **Config**:
 ```yaml
@@ -471,15 +479,27 @@ agents:
     card_change_policy: approve
 ```
 
+**MCP approval workflow**:
+```
+# List pending changes
+MCP tool: list_pending_changes
+
+# Approve a specific change
+MCP tool: approve_card_change { "agent": "my-agent" }
+
+# Reject a specific change
+MCP tool: reject_card_change { "agent": "my-agent" }
+```
+
 ---
 
-### JWS Signature Verification (v0.2)
+### JWS Signature Verification
 
-**What**: Validate Agent Card signatures using the agent's JWK (JSON Web Key).
+**What**: Validate Agent Card signatures using the agent's JWK (JSON Web Key). When an agent serves its Agent Card as a JWS (JSON Web Signature) compact serialization, sentinel verifies the signature during polling to ensure the card has not been tampered with in transit.
 
-**Default**: Not required (v0.1). v0.2 will make it optional but recommended.
+**Default**: Not required. Optional but recommended for production deployments.
 
-**Config** (future):
+**Config**:
 ```yaml
 security:
   card_signature:
@@ -489,12 +509,30 @@ security:
     cache_ttl: 1h
 ```
 
-**How it works** (planned for v0.2):
-1. Fetch card's JWS signature header
-2. Verify signature against agent's JWKS
-3. Extract `iss` (issuer) — must match agent URL
-4. Cache JWK for TTL window (default 1 hour)
-5. If signature invalid → mark card unhealthy, keep cached version
+**How it works**:
+1. Agent Card Manager fetches the card from the backend agent
+2. If the response body is a JWS compact serialization (three base64url-encoded segments separated by dots), sentinel treats it as a signed card
+3. Sentinel fetches the agent's JWKS from the configured `trusted_jwks_urls`
+4. The JWS signature is verified against the JWKS keyset
+5. The JWS payload is extracted and used as the Agent Card JSON
+6. JWKS keys are cached for the configured `cache_ttl` (default 1 hour) to avoid repeated fetches
+7. If signature verification fails:
+   - `require: true` — mark card unhealthy, keep previously cached card, log error
+   - `require: false` — log warning, accept unsigned cards but verify signed ones
+
+**Trusted JWKS URLs**: You can configure multiple JWKS endpoints. Sentinel will try each in order and accept the first successful verification. This supports key rotation scenarios where agents may publish new keys before retiring old ones.
+
+**Error on verification failure**:
+```json
+{
+  "error": {
+    "code": 401,
+    "message": "Agent Card signature verification failed",
+    "hint": "Ensure the agent's JWKS endpoint is reachable and keys are valid",
+    "docs_url": "https://a2a-sentinel.dev/docs/card-signature"
+  }
+}
+```
 
 ---
 
@@ -608,11 +646,11 @@ cat sentinel.log | jq 'select(.stream.duration_ms > 30000)'
 
 ## Push Notification Protection
 
-Push notifications allow agents to send updates to clients. However, they create an SSRF vector if not validated.
+Push notifications allow agents to send updates to clients. However, they create an SSRF (Server-Side Request Forgery) vector if not validated. An attacker could trick the gateway into making requests to internal services by providing a push notification URL that resolves to a private network address.
 
 ### SSRF Defense: Private Network Blocking
 
-**What**: Block push notification URLs that resolve to private networks.
+**What**: Block push notification URLs that resolve to private networks. Sentinel validates all push notification URLs before making outbound requests.
 
 **Default**: Enabled (`block_private_networks: true`)
 
@@ -620,17 +658,30 @@ Push notifications allow agents to send updates to clients. However, they create
 ```yaml
 security:
   push:
-    block_private_networks: true  # Block 10.x, 172.16-31.x, 192.168.x, 127.x
+    block_private_networks: true  # Block 10.x, 172.16-31.x, 192.168.x, 127.x, ::1
     allowed_domains: []           # Optional: whitelist specific domains
     require_https: true           # Require HTTPS for push URLs
-    hmac_secret: ""               # (v0.2) Sign webhooks
+    hmac_secret: ""               # Sign webhooks with HMAC-SHA256
 ```
 
+**How it works**:
+1. Client or agent provides a push notification URL
+2. Sentinel parses the URL and extracts the hostname
+3. The hostname is resolved to an IP address via DNS
+4. The resolved IP is checked against blocked private network ranges
+5. If the URL's hostname matches an entry in `allowed_domains`, it is permitted regardless of IP range
+6. If HTTPS is required (`require_https: true`), non-HTTPS URLs are rejected
+7. If all checks pass, the push notification request proceeds
+
 **Blocked IP ranges**:
-- `10.0.0.0/8` (Private)
-- `172.16.0.0/12` (Private)
-- `192.168.0.0/16` (Private)
-- `127.0.0.0/8` (Loopback)
+- `10.0.0.0/8` (Private — RFC 1918)
+- `172.16.0.0/12` (Private — RFC 1918)
+- `192.168.0.0/16` (Private — RFC 1918)
+- `127.0.0.0/8` (Loopback — IPv4)
+- `::1/128` (Loopback — IPv6)
+- `169.254.0.0/16` (Link-local — IPv4)
+- `fe80::/10` (Link-local — IPv6)
+- `fc00::/7` (Unique local — IPv6)
 
 **Error response**:
 ```json
@@ -659,15 +710,15 @@ security:
 
 **Algorithm**:
 1. Parse push URL
-2. Resolve hostname to IP
-3. If IP in private range:
-   - Check against allowed_domains
-   - If domain matches → allow
-   - Otherwise → reject
+2. Check hostname against `allowed_domains` — if match, allow immediately
+3. Resolve hostname to IP address
+4. If IP in private range → reject with `ErrSSRFBlocked`
+5. If `require_https: true` and scheme is not HTTPS → reject
+6. Otherwise → allow
 
-### HMAC Signing (v0.2)
+### HMAC Webhook Signing
 
-Validate webhook authenticity:
+Validate webhook authenticity with HMAC-SHA256 signatures:
 
 ```yaml
 security:
@@ -676,7 +727,7 @@ security:
     hmac_secret: "sk_webhook_secret_key"
 ```
 
-a2a-sentinel will sign push notifications with HMAC-SHA256. Webhook receiver verifies signature to ensure notification came from sentinel.
+When `hmac_secret` is configured, sentinel signs outbound push notification requests with an `X-Sentinel-Signature` header containing the HMAC-SHA256 digest of the request body. Webhook receivers verify the signature to ensure the notification originated from sentinel.
 
 ---
 
@@ -684,11 +735,11 @@ a2a-sentinel will sign push notifications with HMAC-SHA256. Webhook receiver ver
 
 Replay attacks: attacker records a valid request and resends it later to trigger unintended actions.
 
-### Defense: Nonce + Timestamp Validation (v0.2)
+### Defense: Nonce + Timestamp Validation
 
-**What**: Require unique nonce and recent timestamp in request. Reject requests older than configured window.
+**What**: Track unique nonces and validate request timestamps. Reject or warn on requests that have been seen before or are older than the configured window.
 
-**Default**: Enabled (v0.2 only)
+**Default**: Enabled
 
 **Config**:
 ```yaml
@@ -699,14 +750,27 @@ security:
     nonce_policy: warn      # warn | require
     store: memory           # memory | redis
     redis_url: ""           # If store: redis
+    cleanup_interval: 60s   # Cleanup expired nonces every 60s
 ```
 
 **Nonce policies**:
 
 | Policy | Behavior | Use Case |
 |--------|----------|----------|
-| `warn` | Log if nonce already seen, but still allow | Early warning |
-| `require` | Reject if nonce already seen | Strict protection |
+| `warn` | Log warning if nonce already seen, but still allow the request | Early warning, gradual rollout |
+| `require` | Reject the request if nonce already seen | Strict protection for production |
+
+**How it works**:
+1. Client includes a unique nonce in the `X-Request-ID` header and a Unix timestamp in the `X-Request-Time` header
+2. Sentinel extracts the timestamp and checks that it falls within the configured `window` (default 5 minutes)
+3. Sentinel checks the nonce against the in-memory nonce store (or Redis, if configured)
+4. If the nonce has been seen before:
+   - `warn` policy: log warning, allow the request
+   - `require` policy: reject with 409 (Conflict)
+5. If the nonce is new: record it in the store with the current timestamp
+6. A background goroutine periodically cleans up expired nonces based on `cleanup_interval`
+
+**Memory management**: The in-memory nonce store uses a map with periodic cleanup. Entries older than `window` are purged every `cleanup_interval` to prevent unbounded memory growth.
 
 **Error response**:
 ```json
@@ -724,17 +788,32 @@ security:
 
 **Client adds to request headers**:
 ```
-X-Request-ID: abc123def456xyz789  # Unique nonce
+X-Request-ID: abc123def456xyz789  # Unique nonce (UUID recommended)
 X-Request-Time: 1708999200       # Unix timestamp (seconds)
 ```
 
 **Gateway validation**:
-1. Extract timestamp → check within window
-2. Extract nonce → check against seen-before cache
-3. If valid → forward request
-4. If invalid or expired → 409 (Conflict)
+1. Extract timestamp → check within window (reject if too old)
+2. Extract nonce → check against nonce store
+3. If valid and new → record nonce, forward request
+4. If duplicate nonce → warn or reject based on `nonce_policy`
+5. If expired timestamp → reject with 409
 
-**v0.2 note**: In v0.1, this is a stub that always passes. v0.2 will implement full validation.
+**Example client code**:
+```bash
+NONCE=$(uuidgen)
+TIMESTAMP=$(date -u +%s)
+curl -X POST http://localhost:8080/agents/echo/ \
+  -H "X-Request-ID: $NONCE" \
+  -H "X-Request-Time: $TIMESTAMP" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": "1", "method": "message/send", ...}'
+```
+
+**Flush the nonce cache** (via MCP):
+```
+MCP tool: flush_replay_cache
+```
 
 ---
 
@@ -841,25 +920,26 @@ security:
 
   # ── Agent Card Security ──
   card_signature:
-    require: false          # (v0.2: require JWS signatures)
-    trusted_jwks_urls: []   # URLs to trusted agent JWKS
-    cache_ttl: 1h           # Cache JWKS for this long
+    require: false          # Set true to require JWS-signed Agent Cards
+    trusted_jwks_urls: []   # URLs to trusted agent JWKS endpoints
+    cache_ttl: 1h           # Cache JWKS keys for this long
 
   # ── Push Notification Protection ──
   push:
-    block_private_networks: true
-    allowed_domains: []
-    require_https: true
-    require_challenge: false
-    hmac_secret: ""         # (v0.2: sign webhooks)
+    block_private_networks: true    # Block private network push URLs (SSRF defense)
+    allowed_domains: []             # Domains allowed even if resolving to private IPs
+    require_https: true             # Require HTTPS for push notification URLs
+    require_challenge: false        # Require challenge verification
+    hmac_secret: ""                 # Sign outbound webhooks with HMAC-SHA256
 
   # ── Replay Attack Prevention ──
   replay:
-    enabled: false          # (v0.2: implement full validation)
-    window: 5m
-    nonce_policy: warn      # warn | require
+    enabled: true           # Enable nonce + timestamp replay detection
+    window: 5m              # Accept requests within this time window
+    nonce_policy: warn      # warn (log only) | require (reject duplicates)
     store: memory           # memory | redis
-    redis_url: ""
+    redis_url: ""           # Redis URL if store: redis
+    cleanup_interval: 60s   # Cleanup expired nonces at this interval
 ```
 
 ### Listen Block (Global Settings)
