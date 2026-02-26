@@ -359,6 +359,43 @@ func toolsList() []toolDefinition {
 				"required": []string{"agent_name", "text"},
 			},
 		},
+		// Card change approval tools
+		{
+			Name:        "list_pending_changes",
+			Description: "List all pending Agent Card changes awaiting approval.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			Name:        "approve_card_change",
+			Description: "Approve a pending Agent Card change and apply the new card.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Name of the agent whose card change to approve",
+					},
+				},
+				"required": []string{"agent_name"},
+			},
+		},
+		{
+			Name:        "reject_card_change",
+			Description: "Reject a pending Agent Card change, keeping the old card.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "Name of the agent whose card change to reject",
+					},
+				},
+				"required": []string{"agent_name"},
+			},
+		},
 	}
 }
 

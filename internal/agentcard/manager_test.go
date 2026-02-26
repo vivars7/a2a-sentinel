@@ -900,9 +900,21 @@ func TestHandleCardChange_ApprovePolicy(t *testing.T) {
 	changes := []Change{{Field: "version", OldValue: "1.0", NewValue: "2.0", Critical: true}}
 	mgr.handleCardChange(state, newCard, changes)
 
-	// Approve policy should NOT update the card (behaves like alert)
+	// Approve policy should NOT update the card until approved.
 	if state.card != oldCard {
 		t.Error("approve policy should keep old card")
+	}
+
+	// Verify the change was stored in the pending store.
+	pending := mgr.ListPendingChanges()
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending change, got %d", len(pending))
+	}
+	if pending[0].AgentName != "agent" {
+		t.Errorf("pending AgentName = %q, want %q", pending[0].AgentName, "agent")
+	}
+	if pending[0].Status != "pending" {
+		t.Errorf("pending Status = %q, want %q", pending[0].Status, "pending")
 	}
 }
 
@@ -1127,11 +1139,117 @@ func TestManager_CardChangeApprove_Integration(t *testing.T) {
 	newCard.Version = "2.0"
 	mc.setCard(newCard)
 
-	time.Sleep(200 * time.Millisecond)
+	// Wait for pending change to appear.
+	waitForCondition(t, 2*time.Second, func() bool {
+		return len(mgr.ListPendingChanges()) > 0
+	}, "pending change should be detected")
 
 	// Approve policy should keep old card.
 	got, _ := mgr.GetCard("approve-agent")
 	if got.Version != "1.0" {
 		t.Errorf("approve policy should keep old card, got version %q", got.Version)
+	}
+
+	// Verify pending change exists.
+	pending := mgr.ListPendingChanges()
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending change, got %d", len(pending))
+	}
+	if pending[0].AgentName != "approve-agent" {
+		t.Errorf("pending AgentName = %q, want %q", pending[0].AgentName, "approve-agent")
+	}
+
+	// Approve the change — card should now be updated.
+	if err := mgr.ApproveCardChange("approve-agent"); err != nil {
+		t.Fatalf("ApproveCardChange() error: %v", err)
+	}
+
+	got, _ = mgr.GetCard("approve-agent")
+	if got.Version != "2.0" {
+		t.Errorf("after approval, expected version %q, got %q", "2.0", got.Version)
+	}
+	if len(got.Skills) != 5 {
+		t.Errorf("after approval, expected 5 skills, got %d", len(got.Skills))
+	}
+
+	// Pending list should be empty.
+	if len(mgr.ListPendingChanges()) != 0 {
+		t.Error("expected no pending changes after approval")
+	}
+}
+
+// TestManager_CardChangeApprove_Reject_Integration tests reject flow.
+func TestManager_CardChangeApprove_Reject_Integration(t *testing.T) {
+	srv, mc := newMutableFakeServer()
+	defer srv.Close()
+
+	oldCard := testCard("reject-agent", 2)
+	mc.setCard(oldCard)
+
+	agents := []config.AgentConfig{
+		agentConfigFromServer("reject-agent", srv, func(cfg *config.AgentConfig) {
+			cfg.CardChangePolicy = "approve"
+		}),
+	}
+
+	mgr := NewManager(agents, config.CardSignatureConfig{}, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Wait for initial card.
+	waitForCondition(t, 2*time.Second, func() bool {
+		_, ok := mgr.GetCard("reject-agent")
+		return ok
+	}, "reject-agent initial card")
+
+	// Change the card.
+	newCard := testCard("reject-agent", 5)
+	newCard.Version = "2.0"
+	mc.setCard(newCard)
+
+	// Wait for pending change.
+	waitForCondition(t, 2*time.Second, func() bool {
+		return len(mgr.ListPendingChanges()) > 0
+	}, "pending change should be detected")
+
+	// Reject the change — card should remain old.
+	if err := mgr.RejectCardChange("reject-agent"); err != nil {
+		t.Fatalf("RejectCardChange() error: %v", err)
+	}
+
+	got, _ := mgr.GetCard("reject-agent")
+	if got.Version != "1.0" {
+		t.Errorf("after rejection, expected version %q, got %q", "1.0", got.Version)
+	}
+	if len(got.Skills) != 2 {
+		t.Errorf("after rejection, expected 2 skills, got %d", len(got.Skills))
+	}
+
+	// Pending list should be empty.
+	if len(mgr.ListPendingChanges()) != 0 {
+		t.Error("expected no pending changes after rejection")
+	}
+}
+
+// TestManager_ApproveCardChange_NotFound tests error for nonexistent agent.
+func TestManager_ApproveCardChange_NotFound(t *testing.T) {
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
+	err := mgr.ApproveCardChange("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for approving nonexistent pending change")
+	}
+}
+
+// TestManager_RejectCardChange_NotFound tests error for nonexistent agent.
+func TestManager_RejectCardChange_NotFound(t *testing.T) {
+	mgr := NewManager(nil, config.CardSignatureConfig{}, testLogger())
+	err := mgr.RejectCardChange("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for rejecting nonexistent pending change")
 	}
 }

@@ -48,6 +48,13 @@ type mockBridge struct {
 	metrics        map[string]interface{}
 	securityReport map[string]interface{}
 
+	// Card change approval
+	pendingChanges      []PendingCardChange
+	approvedAgents      []string
+	rejectedAgents      []string
+	approveCardErr      error
+	rejectCardErr       error
+
 	// Error injection
 	getAgentCardErr    error
 	getAggregatedErr   error
@@ -150,6 +157,26 @@ func (m *mockBridge) GetSecurityReport() map[string]interface{} {
 	return m.securityReport
 }
 
+func (m *mockBridge) ListPendingChanges() []PendingCardChange {
+	return m.pendingChanges
+}
+
+func (m *mockBridge) ApproveCardChange(agentName string) error {
+	if m.approveCardErr != nil {
+		return m.approveCardErr
+	}
+	m.approvedAgents = append(m.approvedAgents, agentName)
+	return nil
+}
+
+func (m *mockBridge) RejectCardChange(agentName string) error {
+	if m.rejectCardErr != nil {
+		return m.rejectCardErr
+	}
+	m.rejectedAgents = append(m.rejectedAgents, agentName)
+	return nil
+}
+
 // blockingBridge blocks ListAgents until blockCh is closed. Used to simulate
 // an active connection during Shutdown tests.
 type blockingBridge struct {
@@ -174,6 +201,9 @@ func (b *blockingBridge) SendTestMessage(_, _ string) (*TestResult, error)   { r
 func (b *blockingBridge) GetConfig() map[string]interface{}                  { return nil }
 func (b *blockingBridge) GetMetrics() map[string]interface{}                 { return nil }
 func (b *blockingBridge) GetSecurityReport() map[string]interface{}          { return nil }
+func (b *blockingBridge) ListPendingChanges() []PendingCardChange            { return nil }
+func (b *blockingBridge) ApproveCardChange(_ string) error                   { return nil }
+func (b *blockingBridge) RejectCardChange(_ string) error                    { return nil }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -229,6 +259,15 @@ func defaultMockBridge() *mockBridge {
 			"auth_mode":           "bearer",
 			"rate_limit_enabled":  true,
 			"recent_blocks_count": 3,
+		},
+		pendingChanges: []PendingCardChange{
+			{
+				AgentName:  "agent-a",
+				DetectedAt: time.Now(),
+				Changes:    2,
+				Critical:   true,
+				Status:     "pending",
+			},
 		},
 	}
 }
@@ -388,7 +427,7 @@ func TestInitialize_HasResourcesCapability(t *testing.T) {
 
 // ── tools/list ────────────────────────────────────────────────────────────────
 
-func TestToolsList_ReturnsTenTools(t *testing.T) {
+func TestToolsList_ReturnsThirteenTools(t *testing.T) {
 	_, srv := newTestServer(t, "")
 	resp := postRPC(t, srv.URL, jsonRPCRequest{
 		JSONRPC: "2.0",
@@ -408,8 +447,8 @@ func TestToolsList_ReturnsTenTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tools slice, got %T", result["tools"])
 	}
-	if len(tools) != 10 {
-		t.Errorf("expected 10 tools, got %d", len(tools))
+	if len(tools) != 13 {
+		t.Errorf("expected 13 tools, got %d", len(tools))
 	}
 }
 
@@ -425,16 +464,19 @@ func TestToolsList_ToolNamesCorrect(t *testing.T) {
 	tools := result["tools"].([]interface{})
 
 	wantNames := map[string]bool{
-		"list_agents":          false,
-		"health_check":         false,
-		"get_blocked_requests": false,
-		"get_agent_card":       false,
-		"get_aggregated_card":  false,
+		"list_agents":           false,
+		"health_check":          false,
+		"get_blocked_requests":  false,
+		"get_agent_card":        false,
+		"get_aggregated_card":   false,
 		"get_rate_limit_status": false,
-		"update_rate_limit":    false,
-		"register_agent":       false,
-		"deregister_agent":     false,
-		"send_test_message":    false,
+		"update_rate_limit":     false,
+		"register_agent":        false,
+		"deregister_agent":      false,
+		"send_test_message":     false,
+		"list_pending_changes":  false,
+		"approve_card_change":   false,
+		"reject_card_change":    false,
 	}
 	for _, t2 := range tools {
 		tool := t2.(map[string]interface{})
@@ -1038,6 +1080,194 @@ func TestToolsCall_SendTestMessage_MissingText_ReturnsError(t *testing.T) {
 	}
 }
 
+// ── tools/call: list_pending_changes ─────────────────────────────────────────
+
+func TestToolsCall_ListPendingChanges_ReturnsPending(t *testing.T) {
+	_, srv := newTestServer(t, "")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name": "list_pending_changes",
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      70,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var pending []PendingCardChange
+	if err := json.Unmarshal([]byte(text), &pending); err != nil {
+		t.Fatalf("unmarshal pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Errorf("expected 1 pending change, got %d", len(pending))
+	}
+	if pending[0].AgentName != "agent-a" {
+		t.Errorf("expected agent_name=agent-a, got %q", pending[0].AgentName)
+	}
+	if !pending[0].Critical {
+		t.Error("expected has_critical=true")
+	}
+}
+
+// ── tools/call: approve_card_change ─────────────────────────────────────────
+
+func TestToolsCall_ApproveCardChange_ReturnsResult(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "approve_card_change",
+		"arguments": map[string]interface{}{"agent_name": "agent-a"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      71,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result["approved"] != true {
+		t.Errorf("expected approved=true, got %v", result["approved"])
+	}
+}
+
+func TestToolsCall_ApproveCardChange_MissingAgent_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "approve_card_change",
+		"arguments": map[string]interface{}{},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      72,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing agent_name, got nil")
+	}
+}
+
+func TestToolsCall_ApproveCardChange_BridgeError_ReturnsError(t *testing.T) {
+	bridge := defaultMockBridge()
+	bridge.approveCardErr = errors.New("no pending change")
+	logger := newNopLogger()
+	mcpSrv := NewServer(Config{Host: "127.0.0.1", Port: 0, Token: "tok"}, bridge, logger)
+	httpSrv := httptest.NewServer(http.HandlerFunc(mcpSrv.handleRPC))
+	defer httpSrv.Close()
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "approve_card_change",
+		"arguments": map[string]interface{}{"agent_name": "nonexistent"},
+	})
+
+	resp := postRPC(t, httpSrv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      73,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "tok")
+
+	if resp.Error == nil {
+		t.Fatal("expected error from bridge, got nil")
+	}
+}
+
+// ── tools/call: reject_card_change ──────────────────────────────────────────
+
+func TestToolsCall_RejectCardChange_ReturnsResult(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "reject_card_change",
+		"arguments": map[string]interface{}{"agent_name": "agent-a"},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      74,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+
+	text := extractToolText(t, resp)
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result["rejected"] != true {
+		t.Errorf("expected rejected=true, got %v", result["rejected"])
+	}
+}
+
+func TestToolsCall_RejectCardChange_MissingAgent_ReturnsError(t *testing.T) {
+	_, srv := newTestServer(t, "test-token")
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "reject_card_change",
+		"arguments": map[string]interface{}{},
+	})
+
+	resp := postRPC(t, srv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      75,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "test-token")
+
+	if resp.Error == nil {
+		t.Fatal("expected error for missing agent_name, got nil")
+	}
+}
+
+func TestToolsCall_RejectCardChange_BridgeError_ReturnsError(t *testing.T) {
+	bridge := defaultMockBridge()
+	bridge.rejectCardErr = errors.New("no pending change")
+	logger := newNopLogger()
+	mcpSrv := NewServer(Config{Host: "127.0.0.1", Port: 0, Token: "tok"}, bridge, logger)
+	httpSrv := httptest.NewServer(http.HandlerFunc(mcpSrv.handleRPC))
+	defer httpSrv.Close()
+
+	rawArgs, _ := json.Marshal(map[string]interface{}{
+		"name":      "reject_card_change",
+		"arguments": map[string]interface{}{"agent_name": "nonexistent"},
+	})
+
+	resp := postRPC(t, httpSrv.URL, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      76,
+		Method:  "tools/call",
+		Params:  rawArgs,
+	}, "tok")
+
+	if resp.Error == nil {
+		t.Fatal("expected error from bridge, got nil")
+	}
+}
+
 // ── write tools: auth required ───────────────────────────────────────────────
 
 func TestWriteTool_NoTokenConfigured_Rejected(t *testing.T) {
@@ -1049,6 +1279,8 @@ func TestWriteTool_NoTokenConfigured_Rejected(t *testing.T) {
 		"register_agent",
 		"deregister_agent",
 		"send_test_message",
+		"approve_card_change",
+		"reject_card_change",
 	}
 
 	for _, tool := range writeTools {
@@ -1086,6 +1318,7 @@ func TestReadTool_NoTokenConfigured_Allowed(t *testing.T) {
 		"list_agents",
 		"health_check",
 		"get_rate_limit_status",
+		"list_pending_changes",
 	}
 
 	for _, tool := range readTools {

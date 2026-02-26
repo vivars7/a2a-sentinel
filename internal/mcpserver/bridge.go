@@ -21,6 +21,11 @@ type SentinelBridge interface {
 	DeregisterAgent(name string) error
 	SendTestMessage(agentName, text string) (*TestResult, error)
 
+	// Card change approval methods
+	ListPendingChanges() []PendingCardChange
+	ApproveCardChange(agentName string) error
+	RejectCardChange(agentName string) error
+
 	// Resource methods
 	GetConfig() map[string]interface{}
 	GetMetrics() map[string]interface{}
@@ -66,4 +71,13 @@ type TestResult struct {
 	TaskID       string `json:"task_id"`
 	Status       string `json:"status"`
 	ResponseText string `json:"response_text"`
+}
+
+// PendingCardChange describes a card change awaiting manual approval.
+type PendingCardChange struct {
+	AgentName  string    `json:"agent_name"`
+	DetectedAt time.Time `json:"detected_at"`
+	Changes    int       `json:"changes_count"`
+	Critical   bool      `json:"has_critical"`
+	Status     string    `json:"status"`
 }

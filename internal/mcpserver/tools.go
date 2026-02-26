@@ -38,10 +38,12 @@ func textResult(v interface{}) (toolResult, error) {
 
 // writeToolNames lists tools that modify state and require auth.
 var writeToolNames = map[string]bool{
-	"update_rate_limit":  true,
-	"register_agent":     true,
-	"deregister_agent":   true,
-	"send_test_message":  true,
+	"update_rate_limit":    true,
+	"register_agent":       true,
+	"deregister_agent":     true,
+	"send_test_message":    true,
+	"approve_card_change":  true,
+	"reject_card_change":   true,
 }
 
 // isWriteTool reports whether a tool name identifies a write operation.
@@ -98,6 +100,14 @@ func (s *Server) handleToolsCall(req jsonRPCRequest) jsonRPCResponse {
 		result, err = s.toolDeregisterAgent(params.Arguments)
 	case "send_test_message":
 		result, err = s.toolSendTestMessage(params.Arguments)
+
+	// Card change approval tools
+	case "list_pending_changes":
+		result, err = s.toolListPendingChanges()
+	case "approve_card_change":
+		result, err = s.toolApproveCardChange(params.Arguments)
+	case "reject_card_change":
+		result, err = s.toolRejectCardChange(params.Arguments)
 
 	default:
 		return jsonRPCResponse{
@@ -314,4 +324,49 @@ func (s *Server) toolSendTestMessage(raw json.RawMessage) (toolResult, error) {
 		return toolResult{}, err
 	}
 	return textResult(result)
+}
+
+// ── card change approval tool handlers ──────────────────────────────────────
+
+// toolListPendingChanges calls bridge.ListPendingChanges and returns the result.
+func (s *Server) toolListPendingChanges() (toolResult, error) {
+	pending := s.bridge.ListPendingChanges()
+	return textResult(pending)
+}
+
+// approveRejectArgs holds the arguments for approve_card_change and reject_card_change.
+type approveRejectArgs struct {
+	AgentName string `json:"agent_name"`
+}
+
+// toolApproveCardChange calls bridge.ApproveCardChange for a specific agent.
+func (s *Server) toolApproveCardChange(raw json.RawMessage) (toolResult, error) {
+	var args approveRejectArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+	}
+	if args.AgentName == "" {
+		return toolResult{}, fmt.Errorf("agent_name is required")
+	}
+
+	if err := s.bridge.ApproveCardChange(args.AgentName); err != nil {
+		return toolResult{}, err
+	}
+	return textResult(map[string]bool{"approved": true})
+}
+
+// toolRejectCardChange calls bridge.RejectCardChange for a specific agent.
+func (s *Server) toolRejectCardChange(raw json.RawMessage) (toolResult, error) {
+	var args approveRejectArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+	}
+	if args.AgentName == "" {
+		return toolResult{}, fmt.Errorf("agent_name is required")
+	}
+
+	if err := s.bridge.RejectCardChange(args.AgentName); err != nil {
+		return toolResult{}, err
+	}
+	return textResult(map[string]bool{"rejected": true})
 }

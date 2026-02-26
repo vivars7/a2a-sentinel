@@ -15,11 +15,12 @@ import (
 
 // Manager manages Agent Card lifecycle for all configured agents.
 type Manager struct {
-	mu          sync.RWMutex
-	agents      map[string]*agentState
-	jwsVerifier *JWSVerifier
-	logger      *slog.Logger
-	cancel      context.CancelFunc
+	mu           sync.RWMutex
+	agents       map[string]*agentState
+	jwsVerifier  *JWSVerifier
+	pendingStore *PendingStore
+	logger       *slog.Logger
+	cancel       context.CancelFunc
 }
 
 // agentState holds the runtime state for a single agent.
@@ -79,9 +80,10 @@ func NewManager(agents []config.AgentConfig, sigCfg config.CardSignatureConfig, 
 	})
 
 	return &Manager{
-		agents:      states,
-		jwsVerifier: verifier,
-		logger:      logger,
+		agents:       states,
+		jwsVerifier:  verifier,
+		pendingStore: NewPendingStore(),
+		logger:       logger,
 	}
 }
 
@@ -181,6 +183,41 @@ func (m *Manager) AllAgentStates() []AgentStatus {
 		statuses = append(statuses, m.toAgentStatus(state))
 	}
 	return statuses
+}
+
+// ApproveCardChange approves a pending change and applies the new card.
+func (m *Manager) ApproveCardChange(agentName string) error {
+	change, err := m.pendingStore.Approve(agentName)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state, ok := m.agents[agentName]; ok {
+		state.card = change.NewCard
+		m.logger.Info("agent card change approved and applied",
+			"agent", agentName,
+			"changes", len(change.Changes),
+		)
+	}
+	return nil
+}
+
+// RejectCardChange rejects a pending change, keeping the old card.
+func (m *Manager) RejectCardChange(agentName string) error {
+	err := m.pendingStore.Reject(agentName)
+	if err != nil {
+		return err
+	}
+	m.logger.Info("agent card change rejected",
+		"agent", agentName,
+	)
+	return nil
+}
+
+// ListPendingChanges returns all pending card changes awaiting approval.
+func (m *Manager) ListPendingChanges() []PendingChange {
+	return m.pendingStore.List()
 }
 
 // toAgentStatus converts internal agentState to the public AgentStatus.

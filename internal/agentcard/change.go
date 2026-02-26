@@ -3,6 +3,7 @@ package agentcard
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/vivars7/a2a-sentinel/internal/protocol"
 )
@@ -163,13 +164,23 @@ func (m *Manager) handleCardChange(state *agentState, newCard *protocol.AgentCar
 		}
 
 	case CardChangeApprove:
-		// Store in pending queue — v0.2 MCP approval
-		// For now, behave like alert: keep old card, log warning
+		// Store the change in the pending store for manual approval via MCP.
+		if m.pendingStore != nil {
+			m.pendingStore.Add(&PendingChange{
+				AgentName:  state.name,
+				OldCard:    state.card,
+				NewCard:    newCard,
+				Changes:    changes,
+				DetectedAt: time.Now(),
+				Status:     "pending",
+			})
+		}
 		m.logger.Warn("agent card change pending approval (approve policy)",
 			"agent", state.name,
 			"changes", len(changes),
 			"critical", critical,
 		)
+		// Keep old card until approved
 
 	default:
 		// Unknown policy — treat as alert
