@@ -48,6 +48,7 @@ type Server struct {
 	router        *router.Router
 	healthHandler *health.Handler
 	auditLogger   *audit.Logger
+	metrics       *audit.Metrics
 	logger        *slog.Logger
 	version       string
 }
@@ -142,6 +143,9 @@ func New(cfg *config.Config, version string) (*Server, error) {
 	}
 	auditLogger := audit.NewLogger(logger, auditSampling)
 
+	// 7b. Create Metrics collector
+	metrics := audit.NewMetrics()
+
 	// 8. Find default agent name for health handler
 	defaultAgent := ""
 	for _, a := range cfg.Agents {
@@ -167,6 +171,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		router:        rtr,
 		healthHandler: healthHandler,
 		auditLogger:   auditLogger,
+		metrics:       metrics,
 		logger:        logger,
 		version:       version,
 	}, nil
@@ -339,9 +344,10 @@ func (s *Server) handler() http.Handler {
 	// Build final mux
 	mux := http.NewServeMux()
 
-	// Health endpoints bypass security
+	// Health and metrics endpoints bypass security
 	mux.Handle(s.cfg.Health.LivenessPath, s.healthHandler)
 	mux.Handle(s.cfg.Health.ReadinessPath, s.healthHandler)
+	mux.HandleFunc("/metrics", s.metrics.Handler())
 
 	// Everything else goes through security
 	mux.Handle("/", securedHandler)
