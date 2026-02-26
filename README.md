@@ -23,7 +23,7 @@ a2a-sentinel is not trying to replace [agentgateway](https://github.com/solo-io/
 | **Security** | Configurable | ON by default |
 | **First request** | ~30 min (K8s setup) | ~5 min (docker compose up) |
 | **Error messages** | Standard codes | Educational (hint + docs_url) |
-| **Management** | K8s tools | MCP server (read-only v0.1) |
+| **Management** | K8s tools | MCP server (13 tools, v0.2) |
 | **Migration** | — | Zero-effort (same A2A protocol) |
 
 ---
@@ -37,9 +37,15 @@ a2a-sentinel is not trying to replace [agentgateway](https://github.com/solo-io/
 - [x] Structured audit logging (OTel-compatible, configurable sampling)
 - [x] Educational error messages (hint + docs_url for every block)
 - [x] Aggregated Agent Card (merges skills from all backends)
-- [x] MCP server for management (read-only, 127.0.0.1, v0.1)
 - [x] Graceful shutdown with SSE stream draining
 - [x] Health checks (/healthz, /readyz with configurable readiness modes)
+- [x] Agent Card JWS signature verification
+- [x] Push Notification SSRF protection
+- [x] Replay attack prevention (nonce + timestamp)
+- [x] Full MCP server (13 tools, 4 resources, read + write)
+- [x] sentinel migrate command (-> agentgateway)
+- [x] Card change approve mode (MCP-based)
+- [x] Prometheus-compatible metrics endpoint (/metrics)
 
 ---
 
@@ -143,10 +149,15 @@ Each chunk arrives as a separate SSE event. The gateway drains all outstanding s
 │  └─────────┘  └──────────────┘        └────────────┘│
 │                                                       │
 │  ┌──────────────────────────────────────────────────┐│
-│  │ MCP Server (read-only, 127.0.0.1:8081)          ││
-│  │ • list_agents                                    ││
-│  │ • health_check                                   ││
-│  │ • blocked (recent audit entries)                ││
+│  │ MCP Server (127.0.0.1:8081) — 13 tools          ││
+│  │ Read:  list_agents, get_agent_status,            ││
+│  │        get_aggregated_card, health_check,        ││
+│  │        get_config, get_audit_log, get_metrics    ││
+│  │ Write: update_rate_limit, reload_config,         ││
+│  │        toggle_agent, rotate_api_key,             ││
+│  │        flush_replay_cache, trigger_card_poll     ││
+│  │ Card:  list_pending_changes,                     ││
+│  │        approve_card_change, reject_card_change   ││
 │  └──────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────┘
 ```
@@ -338,6 +349,9 @@ All code includes `_test.go` files covering happy path, error conditions, and co
 # Generate config template
 ./sentinel init --profile dev
 
+# Migrate config to agentgateway format
+./sentinel migrate --to agentgateway --output agentgateway.yaml
+
 # Show version
 ./sentinel --version
 
@@ -354,7 +368,7 @@ All code includes `_test.go` files covering happy path, error conditions, and co
 ```
 a2a-sentinel/
 ├── cmd/sentinel/
-│   ├── main.go              # CLI entrypoint (serve, validate, init)
+│   ├── main.go              # CLI entrypoint (serve, validate, init, migrate)
 │   └── main_test.go
 ├── internal/
 │   ├── config/              # YAML parsing, validation, dev/prod profiles
@@ -368,7 +382,7 @@ a2a-sentinel/
 │   ├── router/              # path-prefix and single-agent routing
 │   ├── agentcard/           # Agent Card polling, caching, aggregation
 │   ├── audit/               # OTel-compatible audit logging
-│   └── mcpserver/           # MCP v0.1 read-only management
+│   └── mcpserver/           # MCP server (13 tools, read + write + card approval)
 ├── examples/
 │   ├── echo-agent/          # Synchronous demo agent (Python)
 │   └── streaming-agent/     # SSE streaming demo agent (Python)
@@ -379,6 +393,7 @@ a2a-sentinel/
 │   └── MIGRATION.md         # Migration guide to agentgateway
 ├── docker-compose.yaml      # Local development stack
 ├── sentinel.yaml.example    # Full configuration reference
+├── CHANGELOG.md             # Version history
 └── README.md                # This file
 ```
 
@@ -423,30 +438,41 @@ When you're ready to move to production infrastructure, migrate to agentgateway 
 
 **No agent code changes required.** Both sentinel and agentgateway use the same A2A protocol and expect the same Agent Card format. Your agents work with either gateway out of the box.
 
-The `sentinel migrate` CLI tool (planned for v0.2) will generate agentgateway-compatible config from your existing sentinel.yaml.
+Use the `sentinel migrate` command to generate agentgateway-compatible config from your existing sentinel.yaml:
+
+```bash
+sentinel migrate --to agentgateway --output agentgateway.yaml
+```
+
+See [docs/MIGRATION.md](docs/MIGRATION.md) for the full migration guide.
 
 ---
 
 ## Roadmap
 
-**v0.1 (Current)**
+**v0.1**
 - Core gateway (HTTP/SSE proxy)
 - 2-layer rate limiting + authentication
 - Agent Card caching with change detection
 - Structured audit logging (OTel format)
 - Health checks (/healthz, /readyz)
-- MCP server (read-only)
+- MCP server (read-only, 3 tools)
 
-**v0.2 (Planned)**
-- Full MCP server (write operations)
-- JWS/SSRF/replay attack mitigation
-- `sentinel migrate` tool for agentgateway
-- OTel metrics export (Prometheus/Datadog/New Relic)
+**v0.2 (Current)**
+- Full MCP server (13 tools: read + write + card approval)
+- JWS Agent Card signature verification
+- SSRF protection for push notifications
+- Replay attack prevention (nonce + timestamp)
+- `sentinel migrate` command for agentgateway
+- Card change approve mode (MCP-based workflow)
+- Prometheus-compatible metrics endpoint (/metrics)
+- Security integration test suite
 
-**v0.3**
+**v0.3 (Planned)**
 - gRPC binding support (in addition to JSON-RPC and REST)
 - Helm chart for Kubernetes deployment
 - Policy engine (attribute-based access control)
+- OTel SDK integration (Jaeger, Datadog)
 
 **v1.0**
 - OPA policy integration
@@ -485,6 +511,8 @@ The `sentinel migrate` CLI tool (planned for v0.2) will generate agentgateway-co
 - **Architecture & design**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Security**: [docs/SECURITY.md](docs/SECURITY.md)
 - **Error reference**: [docs/ERRORS.md](docs/ERRORS.md)
+- **Migration guide**: [docs/MIGRATION.md](docs/MIGRATION.md)
+- **Changelog**: [CHANGELOG.md](CHANGELOG.md)
 - **A2A Protocol spec**: https://a2a-protocol.github.io/spec/
 
 ### Issues & Feedback

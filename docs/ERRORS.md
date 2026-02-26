@@ -137,6 +137,53 @@ The `data` field contains the full SentinelError object, including the hint and 
 
 ---
 
+#### ErrCardSignatureInvalid
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 401 |
+| **Message** | Agent Card signature verification failed |
+| **Hint** | Ensure the agent's JWKS endpoint is reachable and keys are valid |
+| **DocsURL** | https://a2a-sentinel.dev/docs/card-signature |
+
+**When it occurs:**
+- Agent Card is served as a JWS compact serialization but signature verification fails
+- JWKS endpoint is unreachable or returns invalid keys
+- The signing key has been rotated but the JWKS endpoint has not been updated
+- `security.card_signature.require` is `true` and the card is unsigned
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 401,
+    "message": "Agent Card signature verification failed",
+    "hint": "Ensure the agent's JWKS endpoint is reachable and keys are valid",
+    "docs_url": "https://a2a-sentinel.dev/docs/card-signature"
+  }
+}
+```
+
+**How to fix:**
+1. **Verify JWKS endpoint**: Check that the agent's JWKS URL is reachable
+   ```bash
+   curl https://agent.example.com/.well-known/jwks.json | jq .
+   ```
+2. **Check key validity**: Ensure the signing key ID (`kid`) in the JWS header matches a key in the JWKS
+3. **Verify configuration**: Check `security.card_signature.trusted_jwks_urls` in sentinel.yaml:
+   ```yaml
+   security:
+     card_signature:
+       require: true
+       trusted_jwks_urls:
+         - https://agent.example.com/.well-known/jwks.json
+       cache_ttl: 1h
+   ```
+4. **Disable requirement**: If JWS is not needed, set `require: false` (not recommended for production)
+5. See [JWS Signature Verification](./SECURITY.md#jws-signature-verification) for details
+
+---
+
 #### ErrForbidden
 
 | Field | Value |
@@ -425,6 +472,94 @@ See [Rate Limiting Configuration](../docs/SECURITY.md#rate-limiting) for advance
 
 ---
 
+#### ErrMCPUnauthorized
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 403 |
+| **Message** | MCP operation unauthorized |
+| **Hint** | Provide a valid MCP auth token. Configure mcp.auth_token in sentinel.yaml |
+| **DocsURL** | https://a2a-sentinel.dev/docs/mcp |
+
+**When it occurs:**
+- A write operation is attempted on the MCP server without a valid auth token
+- The MCP auth token does not match the configured token
+- A destructive MCP tool (e.g., `reload_config`, `rotate_api_key`) is called without authorization
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 403,
+    "message": "MCP operation unauthorized",
+    "hint": "Provide a valid MCP auth token. Configure mcp.auth_token in sentinel.yaml",
+    "docs_url": "https://a2a-sentinel.dev/docs/mcp"
+  }
+}
+```
+
+**How to fix:**
+1. **Provide auth token**: Include the MCP auth token in your request
+2. **Check configuration**: Verify the token matches what is configured:
+   ```yaml
+   mcp:
+     enabled: true
+     port: 8081
+     auth_token: "your-mcp-token"
+   ```
+3. **Read-only tools**: Some MCP tools (e.g., `list_agents`, `health_check`) do not require auth tokens
+4. See the MCP server section in [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--mcp-management-server) for details
+
+---
+
+#### ErrCardChangePending
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 202 |
+| **Message** | Agent Card change pending approval |
+| **Hint** | Card change detected and queued for approval. Use MCP tools to approve or reject |
+| **DocsURL** | https://a2a-sentinel.dev/docs/card-approval |
+
+**When it occurs:**
+- An agent's card change policy is set to `approve`
+- A new Agent Card is detected during polling that differs from the cached version
+- The change is stored in the pending queue awaiting manual approval
+
+**Example audit log entry:**
+```json
+{
+  "timestamp": "2026-02-27T12:34:56Z",
+  "level": "warn",
+  "msg": "agent_card_change_pending",
+  "agent": "my-agent",
+  "policy": "approve",
+  "changes": 3,
+  "critical": true
+}
+```
+
+**How to resolve:**
+1. **List pending changes**: Use the MCP tool to see what changed
+   ```
+   MCP tool: list_pending_changes
+   ```
+2. **Review changes**: Inspect the diff between old and new Agent Card
+3. **Approve or reject**: Use MCP tools to take action
+   ```
+   MCP tool: approve_card_change { "agent": "my-agent" }
+   MCP tool: reject_card_change { "agent": "my-agent" }
+   ```
+4. **Change policy**: If manual approval is not needed, set `card_change_policy: auto`:
+   ```yaml
+   agents:
+     - name: my-agent
+       card_change_policy: auto
+   ```
+5. See [Card Change Approve Mode](./SECURITY.md#3-approve) for details
+
+---
+
 ### Agent & Routing
 
 #### ErrNoRoute
@@ -606,9 +741,10 @@ When a SentinelError is converted to a JSON-RPC error response, the HTTP status 
 
 | HTTP Status | JSON-RPC Code | JSON-RPC Meaning | Examples |
 |---|---|---|---|
+| 202 | — | (Not an error) | ErrCardChangePending (audit log only) |
 | 400 | -32600 | Invalid Request | ErrInvalidRequest |
-| 401 | -32600 | Invalid Request | ErrAuthRequired, ErrAuthInvalid |
-| 403 | -32600 | Invalid Request | ErrForbidden, ErrSSRFBlocked |
+| 401 | -32600 | Invalid Request | ErrAuthRequired, ErrAuthInvalid, ErrCardSignatureInvalid |
+| 403 | -32600 | Invalid Request | ErrForbidden, ErrSSRFBlocked, ErrMCPUnauthorized |
 | 404 | -32601 | Method not found | ErrNoRoute |
 | 409 | -32600 | Invalid Request | ErrReplayDetected |
 | 429 | -32600 | Invalid Request | ErrRateLimited, ErrStreamLimitExceeded |

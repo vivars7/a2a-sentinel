@@ -8,9 +8,11 @@ a2a-sentinel is a lightweight, security-first A2A (Agent-to-Agent) protocol gate
 3. [Component Overview](#component-overview)
 4. [Security Pipeline](#security-pipeline)
 5. [Proxy Architecture](#proxy-architecture)
-6. [Configuration System](#configuration-system)
-7. [Design Principles](#design-principles)
-8. [Graceful Shutdown](#graceful-shutdown)
+6. [Metrics Endpoint](#metrics-endpoint)
+7. [Configuration System](#configuration-system)
+8. [CLI Subcommands](#cli-subcommands)
+9. [Design Principles](#design-principles)
+10. [Graceful Shutdown](#graceful-shutdown)
 
 ---
 
@@ -293,9 +295,9 @@ Request Flow:
 ├──────────────────────────────────────────────────┤
 │ 4. AuthMiddleware       → JWT/API-Key validation│
 │ 5. UserRateLimiter      → Max M req/sec per user│
-│ 6. JWSVerifier (stub)   → Future: JWS check     │
-│ 7. ReplayDetector (stub)→ Future: Replay defense│
-│ 8. SSRFChecker (stub)   → Future: SSRF defense  │
+│ 6. JWSVerifier          → Agent Card JWS check  │
+│ 7. ReplayDetector       → Nonce + timestamp      │
+│ 8. SSRFChecker          → Private network block  │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -317,9 +319,22 @@ Request Flow:
   - Keyed by authenticated subject
   - Optional per-agent overrides
 
-- **JWSVerifier, ReplayDetector, SSRFChecker** — Stubs (v0.2)
-  - Currently pass through all requests
-  - Future: JWS signature verification, replay token tracking, SSRF validation
+- **JWSVerifier** — Agent Card JWS signature verification
+  - Verifies JWS-signed Agent Cards during polling
+  - Fetches and caches JWKS from trusted endpoints
+  - Configurable: `security.card_signature.require` (true/false)
+
+- **ReplayDetector** — Nonce + timestamp replay prevention
+  - Tracks request nonces in memory (or Redis)
+  - Configurable policies: `warn` (log only) or `require` (reject duplicates)
+  - Background cleanup of expired nonces
+  - Configurable: `security.replay.window`, `security.replay.nonce_policy`
+
+- **SSRFChecker** — Push notification SSRF protection
+  - Blocks push notification URLs resolving to private networks
+  - Validates against domain allowlist
+  - Enforces HTTPS requirement
+  - Configurable: `security.push.block_private_networks`, `security.push.allowed_domains`
 
 ### `proxy/` — HTTP and SSE Proxying
 
@@ -492,23 +507,46 @@ Records all requests and security decisions in OTel-compatible format.
 
 ### `mcpserver/` — MCP Management Server
 
-Optional MCP (Model Context Protocol) server for management (read-only, v0.1).
+Optional MCP (Model Context Protocol) server for gateway management.
 
 **Key features:**
-- Disabled by default
+- Disabled by default (`mcp.enabled: true` to enable)
 - Listens on 127.0.0.1 only (local access)
-- Token-based authentication (optional)
+- Token-based authentication for write operations (optional)
+- 13 tools (read + write + card approval), 4 resources
 
-**Available tools:**
+**Read tools** (no auth required):
 - `list_agents` — List all configured agents with health status
 - `get_agent_status` — Get detailed status for one agent
 - `get_aggregated_card` — Fetch merged Agent Card
 - `health_check` — Check gateway and agent health
+- `get_config` — Get current gateway configuration
+- `get_audit_log` — Query recent audit log entries
+- `get_metrics` — Get current Prometheus metrics
+
+**Write tools** (auth token required):
+- `update_rate_limit` — Update rate limit settings at runtime
+- `reload_config` — Reload sentinel.yaml without restart
+- `toggle_agent` — Enable/disable an agent
+- `rotate_api_key` — Rotate API key for authentication
+- `flush_replay_cache` — Clear the replay nonce cache
+- `trigger_card_poll` — Force immediate Agent Card poll for an agent
+
+**Card approval tools** (auth token required):
+- `list_pending_changes` — List pending Agent Card changes
+- `approve_card_change` — Approve a pending card change
+- `reject_card_change` — Reject a pending card change
+
+**Resources** (4):
+- `sentinel://config` — Current configuration
+- `sentinel://agents` — Agent list with health
+- `sentinel://audit` — Recent audit entries
+- `sentinel://metrics` — Prometheus metrics snapshot
 
 **Design:**
-- Read-only (no configuration changes via MCP)
-- Useful for monitoring and debugging
-- Foundation for future management features
+- Read tools are safe for monitoring and debugging
+- Write tools require MCP auth token for safety
+- Card approval tools support the `approve` change policy workflow
 
 ---
 
@@ -526,9 +564,9 @@ Layer 1: PRE-AUTH (fast termination paths)
 Layer 2: POST-AUTH
   └─ AuthMiddleware (JWT, API Key, passthrough)
      └─ UserRateLimiter (max requests/sec per user)
-     └─ JWSVerifier (stub)
-     └─ ReplayDetector (stub)
-     └─ SSRFChecker (stub)
+     └─ JWSVerifier (Agent Card signature verification)
+     └─ ReplayDetector (nonce + timestamp validation)
+     └─ SSRFChecker (push notification SSRF protection)
 ```
 
 ### Rate Limiting
@@ -701,6 +739,65 @@ Client disconnects (or idle timeout)
     ├─ Release stream slot
     └─ Close both goroutines
 ```
+
+---
+
+## Metrics Endpoint
+
+a2a-sentinel exposes a Prometheus-compatible metrics endpoint at `/metrics` with zero external dependencies. The metrics are generated from internal counters in the audit subsystem.
+
+**Endpoint**: `GET /metrics`
+
+**Exposed metrics**:
+- `sentinel_requests_total{agent, status}` — Total requests by agent and status (allow/block)
+- `sentinel_request_duration_seconds{agent}` — Request latency histogram
+- `sentinel_active_streams{agent}` — Current active SSE streams per agent
+- `sentinel_rate_limit_hits_total{layer}` — Rate limit rejections by layer (ip/user/global)
+- `sentinel_agent_health{agent}` — Agent health status (1 = healthy, 0 = unhealthy)
+- `sentinel_card_changes_total{agent, policy}` — Agent Card changes detected
+
+**Design**:
+- No external dependencies (no Prometheus client library)
+- Metrics are collected in-memory via atomic counters
+- `/metrics` handler formats output in Prometheus exposition format
+- Compatible with Prometheus, Grafana, Datadog agent, and other scrapers
+
+**Configuration**:
+```yaml
+# Metrics are available whenever the server is running
+# No additional configuration needed
+# Scrape at: http://localhost:8080/metrics
+```
+
+---
+
+## CLI Subcommands
+
+The `sentinel` binary supports the following subcommands:
+
+| Subcommand | Description | Example |
+|------------|-------------|---------|
+| `serve` | Start the gateway server | `sentinel --config sentinel.yaml serve` |
+| `validate` | Validate configuration file | `sentinel --config sentinel.yaml validate` |
+| `init` | Generate config template | `sentinel init --profile dev` |
+| `migrate` | Convert config to agentgateway format | `sentinel migrate --to agentgateway --output agentgateway.yaml` |
+| `help` | Show usage information | `sentinel help` |
+| `--version` | Show version | `sentinel --version` |
+
+### migrate Subcommand
+
+The `migrate` subcommand converts sentinel.yaml to agentgateway-compatible configuration:
+
+```bash
+sentinel migrate --to agentgateway --output agentgateway.yaml
+```
+
+**Flags**:
+- `--to` — Target format (currently only `agentgateway`)
+- `--input` — Input sentinel.yaml path (default: `sentinel.yaml`)
+- `--output` — Output file path (required)
+
+The output is a best-effort conversion. See [MIGRATION.md](./MIGRATION.md) for the full migration guide and field mapping table.
 
 ---
 
@@ -996,11 +1093,15 @@ a2a-sentinel implements a layered security architecture:
 
 1. **Protocol Detection** — Identifies JSON-RPC, REST, SSE
 2. **Two-Layer Security** — IP rate limit (pre-auth) + auth + user rate limit (post-auth)
-3. **Routing** — Path-prefix or single-agent modes
-4. **Proxying** — HTTP and SSE with manual header control
-5. **Agent Card Management** — Polling, caching, health tracking, aggregation
-6. **Audit Logging** — OTel-compatible structured logs
-7. **Graceful Shutdown** — Stream draining with configurable timeout
+3. **Advanced Security** — JWS card verification, replay detection, SSRF protection
+4. **Routing** — Path-prefix or single-agent modes
+5. **Proxying** — HTTP and SSE with manual header control
+6. **Agent Card Management** — Polling, caching, health tracking, aggregation, approve mode
+7. **Audit Logging** — OTel-compatible structured logs
+8. **Metrics** — Prometheus-compatible /metrics endpoint
+9. **MCP Server** — 13 tools (read + write + card approval), 4 resources
+10. **Migration** — `sentinel migrate` for agentgateway conversion
+11. **Graceful Shutdown** — Stream draining with configurable timeout
 
 The design prioritizes **zero agent dependency** (transparent to backends), **security by default** (all protections enabled), and **educational errors** (every block includes guidance).
 
