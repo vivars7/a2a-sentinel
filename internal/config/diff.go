@@ -66,6 +66,7 @@ func Diff(old, new *Config) []Change {
 	diffField(&changes, "security.push.require_https", old.Security.Push.RequireHTTPS, new.Security.Push.RequireHTTPS, true)
 	diffField(&changes, "security.push.require_challenge", old.Security.Push.RequireChallenge, new.Security.Push.RequireChallenge, true)
 	diffStringSlice(&changes, "security.push.allowed_domains", old.Security.Push.AllowedDomains, new.Security.Push.AllowedDomains, true)
+	diffField(&changes, "security.push.dns_fail_policy", old.Security.Push.DNSFailPolicy, new.Security.Push.DNSFailPolicy, true)
 
 	// ── Reloadable: logging ──
 	diffField(&changes, "logging.level", old.Logging.Level, new.Logging.Level, true)

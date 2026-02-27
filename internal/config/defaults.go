@@ -189,6 +189,9 @@ func applyPushDefaults(p *PushConfig) {
 		p.RequireHTTPS = true
 		p.RequireChallenge = true
 	}
+	if p.DNSFailPolicy == "" {
+		p.DNSFailPolicy = "block"
+	}
 }
 
 func applyAuditDefaults(a *AuditConfig) {

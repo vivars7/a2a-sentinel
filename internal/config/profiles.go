@@ -9,6 +9,7 @@ func DevProfile() string {
 listen:
   host: 127.0.0.1
   port: 8080
+  grpc_port: 0
   max_connections: 100
   global_rate_limit: 1000
   trusted_proxies: []
@@ -94,6 +95,7 @@ security:
     require_https: false
     require_challenge: false
     hmac_secret: ""
+    dns_fail_policy: block
 
 body_inspection:
   max_size: 1048576
@@ -126,6 +128,7 @@ func ProdProfile() string {
 listen:
   host: 0.0.0.0
   port: 8080
+  grpc_port: 0
   max_connections: 1000
   global_rate_limit: 5000
   trusted_proxies: []
@@ -211,6 +214,7 @@ security:
     require_https: true
     require_challenge: true
     hmac_secret: ""
+    dns_fail_policy: block
 
 body_inspection:
   max_size: 1048576
