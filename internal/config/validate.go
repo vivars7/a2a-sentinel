@@ -94,6 +94,11 @@ func Validate(cfg *Config) error {
 		errs = append(errs, fmt.Sprintf("security.replay.nonce_policy must be one of: warn, require (got %q)", cfg.Security.Replay.NoncePolicy))
 	}
 
+	// ── Nonce source ──
+	if !isValidNonceSource(cfg.Security.Replay.NonceSource) {
+		errs = append(errs, fmt.Sprintf("security.replay.nonce_source must be one of: auto, header, jsonrpc-id (got %q)", cfg.Security.Replay.NonceSource))
+	}
+
 	// ── TLS files ──
 	if cfg.Listen.TLS.CertFile != "" {
 		if _, err := os.Stat(cfg.Listen.TLS.CertFile); err != nil {
@@ -163,6 +168,14 @@ func isValidCardChangePolicy(p string) bool {
 func isValidNoncePolicy(p string) bool {
 	switch p {
 	case "warn", "require":
+		return true
+	}
+	return false
+}
+
+func isValidNonceSource(s string) bool {
+	switch s {
+	case "auto", "header", "jsonrpc-id":
 		return true
 	}
 	return false
