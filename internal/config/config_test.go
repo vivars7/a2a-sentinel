@@ -275,6 +275,11 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	if cfg.Security.CardSignature.CacheTTL.Duration != 3600*time.Second {
 		t.Errorf("security.card_signature.cache_ttl = %v, want %v", cfg.Security.CardSignature.CacheTTL.Duration, 3600*time.Second)
 	}
+
+	// Push defaults
+	if cfg.Security.Push.DNSFailPolicy != "block" {
+		t.Errorf("security.push.dns_fail_policy = %q, want %q", cfg.Security.Push.DNSFailPolicy, "block")
+	}
 }
 
 func TestLoad_MultipleValidationErrors(t *testing.T) {
@@ -894,5 +899,37 @@ agents:
 	}
 	if !strings.Contains(msg, "listen.tls.key_file") {
 		t.Errorf("error should mention key_file: %v", msg)
+	}
+}
+
+func TestValidate_InvalidDNSFailPolicy(t *testing.T) {
+	cfg := &Config{}
+	cfg.Agents = []AgentConfig{
+		{Name: "test", URL: "http://localhost:9000", CardChangePolicy: "alert"},
+	}
+	ApplyDefaults(cfg)
+	cfg.Security.Push.DNSFailPolicy = "invalid"
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for invalid dns_fail_policy")
+	}
+	if !strings.Contains(err.Error(), "security.push.dns_fail_policy must be one of") {
+		t.Errorf("error should mention dns_fail_policy: %v", err)
+	}
+}
+
+func TestValidate_ValidDNSFailPolicies(t *testing.T) {
+	for _, policy := range []string{"block", "allow"} {
+		t.Run(policy, func(t *testing.T) {
+			cfg := &Config{}
+			cfg.Agents = []AgentConfig{
+				{Name: "test", URL: "http://localhost:9000", CardChangePolicy: "alert"},
+			}
+			ApplyDefaults(cfg)
+			cfg.Security.Push.DNSFailPolicy = policy
+			if err := Validate(cfg); err != nil {
+				t.Errorf("dns_fail_policy %q should be valid: %v", policy, err)
+			}
+		})
 	}
 }

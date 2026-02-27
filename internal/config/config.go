@@ -200,6 +200,7 @@ type PushConfig struct {
 	RequireHTTPS         bool     `yaml:"require_https"`
 	RequireChallenge     bool     `yaml:"require_challenge"`
 	HMACSecret           string   `yaml:"hmac_secret"`
+	DNSFailPolicy        string   `yaml:"dns_fail_policy"` // "block" or "allow"
 }
 
 // BodyInspectionConfig controls how request bodies are read and inspected.
