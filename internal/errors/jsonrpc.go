@@ -43,7 +43,7 @@ func httpToJSONRPCCode(httpCode int) int {
 		return -32600 // Invalid Request
 	case 404:
 		return -32601 // Method not found
-	case 503:
+	case 502, 503:
 		return -32603 // Internal error
 	default:
 		return -32603 // Internal error

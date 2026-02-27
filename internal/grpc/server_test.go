@@ -13,6 +13,7 @@ import (
 
 	a2av1 "github.com/vivars7/a2a-sentinel/gen/a2a/v1"
 	"github.com/vivars7/a2a-sentinel/internal/config"
+	sentinelerrors "github.com/vivars7/a2a-sentinel/internal/errors"
 	"github.com/vivars7/a2a-sentinel/internal/protocol"
 	"github.com/vivars7/a2a-sentinel/internal/proxy"
 	"github.com/vivars7/a2a-sentinel/internal/router"
@@ -1026,4 +1027,215 @@ func (s *streamCollector) Context() context.Context {
 		return s.ctx
 	}
 	return context.Background()
+}
+
+// ── Error Mapping Alignment Tests ──
+
+func TestHTTPStatusToGRPCCode_502(t *testing.T) {
+	// Verify 502 Bad Gateway maps to Unavailable
+	got := httpStatusToGRPCCode(http.StatusBadGateway)
+	if got != codes.Unavailable {
+		t.Errorf("httpStatusToGRPCCode(502) = %s, want Unavailable", got)
+	}
+}
+
+func TestHTTPStatusToGRPCCode_UnknownStatus(t *testing.T) {
+	// Unknown HTTP status should map to Internal
+	got := httpStatusToGRPCCode(418) // I'm a teapot
+	if got != codes.Internal {
+		t.Errorf("httpStatusToGRPCCode(418) = %s, want Internal", got)
+	}
+}
+
+func TestSentinelErrorToGRPC_WithHintAndDocs(t *testing.T) {
+	err := sentinelErrorToGRPC(&sentinelerrors.SentinelError{
+		Code:    429,
+		Message: "Rate limit exceeded",
+		Hint:    "Wait before retrying",
+		DocsURL: "https://a2a-sentinel.dev/docs/rate-limit",
+	})
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.ResourceExhausted {
+		t.Errorf("expected ResourceExhausted, got %s", st.Code())
+	}
+	msg := st.Message()
+	if !strings.Contains(msg, "Rate limit exceeded") {
+		t.Errorf("message should contain error message: %s", msg)
+	}
+	if !strings.Contains(msg, "hint: Wait before retrying") {
+		t.Errorf("message should contain hint: %s", msg)
+	}
+	if !strings.Contains(msg, "docs: https://a2a-sentinel.dev/docs/rate-limit") {
+		t.Errorf("message should contain docs_url: %s", msg)
+	}
+}
+
+func TestSentinelErrorToGRPC_WithoutHint(t *testing.T) {
+	err := sentinelErrorToGRPC(&sentinelerrors.SentinelError{
+		Code:    500,
+		Message: "Internal error",
+	})
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Internal {
+		t.Errorf("expected Internal, got %s", st.Code())
+	}
+	// Should not contain "hint:" when hint is empty
+	if strings.Contains(st.Message(), "hint:") {
+		t.Errorf("message should not contain hint when empty: %s", st.Message())
+	}
+}
+
+func TestSentinelErrorToGRPC_NonSentinelError(t *testing.T) {
+	err := sentinelErrorToGRPC(fmt.Errorf("plain error"))
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Internal {
+		t.Errorf("expected Internal for non-SentinelError, got %s", st.Code())
+	}
+	if !strings.Contains(st.Message(), "plain error") {
+		t.Errorf("message should contain original error: %s", st.Message())
+	}
+}
+
+// ── All predefined errors mapping test ──
+
+func TestSentinelErrorToGRPC_AllPredefined(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      *sentinelerrors.SentinelError
+		wantCode codes.Code
+	}{
+		{"ErrAuthRequired", sentinelerrors.ErrAuthRequired, codes.Unauthenticated},
+		{"ErrAuthInvalid", sentinelerrors.ErrAuthInvalid, codes.Unauthenticated},
+		{"ErrForbidden", sentinelerrors.ErrForbidden, codes.PermissionDenied},
+		{"ErrRateLimited", sentinelerrors.ErrRateLimited, codes.ResourceExhausted},
+		{"ErrAgentUnavailable", sentinelerrors.ErrAgentUnavailable, codes.Unavailable},
+		{"ErrStreamLimitExceeded", sentinelerrors.ErrStreamLimitExceeded, codes.ResourceExhausted},
+		{"ErrReplayDetected", sentinelerrors.ErrReplayDetected, codes.AlreadyExists},
+		{"ErrSSRFBlocked", sentinelerrors.ErrSSRFBlocked, codes.PermissionDenied},
+		{"ErrInvalidRequest", sentinelerrors.ErrInvalidRequest, codes.InvalidArgument},
+		{"ErrNoRoute", sentinelerrors.ErrNoRoute, codes.NotFound},
+		{"ErrGlobalLimitReached", sentinelerrors.ErrGlobalLimitReached, codes.Unavailable},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			grpcErr := sentinelErrorToGRPC(tt.err)
+			st, _ := status.FromError(grpcErr)
+			if st.Code() != tt.wantCode {
+				t.Errorf("%s: httpCode=%d → gRPC %s, want %s",
+					tt.name, tt.err.Code, st.Code(), tt.wantCode)
+			}
+		})
+	}
+}
+
+// ── Interceptor edge case tests ──
+
+func TestSecurityStreamInterceptor_BlocksRequest(t *testing.T) {
+	// Create a middleware that always rejects
+	rejectMiddleware := &rejectAllMiddleware{}
+	middlewares := []security.Middleware{rejectMiddleware}
+
+	logger := testLogger()
+	interceptor := SecurityStreamInterceptor(middlewares, logger)
+
+	// Create a mock server stream
+	mockStream := &mockServerStream{
+		ctx: context.Background(),
+	}
+
+	err := interceptor(nil, mockStream, &grpc.StreamServerInfo{
+		FullMethod: "/a2a.v1.A2AService/StreamMessage",
+	}, func(srv interface{}, stream grpc.ServerStream) error {
+		t.Fatal("handler should not be called when security rejects")
+		return nil
+	})
+
+	if err == nil {
+		t.Fatal("expected error when security rejects stream")
+	}
+}
+
+// rejectAllMiddleware is a test middleware that rejects all requests with 403.
+type rejectAllMiddleware struct{}
+
+func (m *rejectAllMiddleware) Process(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("rejected"))
+	})
+}
+
+func (m *rejectAllMiddleware) Name() string { return "reject_all" }
+
+// mockServerStream implements grpc.ServerStream for testing.
+type mockServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *mockServerStream) Context() context.Context { return s.ctx }
+
+func TestBuildSyntheticRequest_WithMetadata(t *testing.T) {
+	md := metadata.Pairs(
+		"authorization", "Bearer test-token",
+		"x-custom-header", "custom-value",
+	)
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	req := buildSyntheticRequest(ctx, "/a2a.v1.A2AService/SendMessage")
+
+	if req.Header.Get("authorization") != "Bearer test-token" {
+		t.Errorf("expected authorization header, got %q", req.Header.Get("authorization"))
+	}
+	if req.Header.Get("x-custom-header") != "custom-value" {
+		t.Errorf("expected custom header, got %q", req.Header.Get("x-custom-header"))
+	}
+	if req.Method != http.MethodPost {
+		t.Errorf("expected POST method, got %s", req.Method)
+	}
+}
+
+func TestBuildSyntheticRequest_NoMetadata(t *testing.T) {
+	req := buildSyntheticRequest(context.Background(), "/a2a.v1.A2AService/SendMessage")
+
+	// http.NewRequestWithContext cleans double slashes; just verify it doesn't panic
+	if req.URL.Path == "" {
+		t.Error("expected non-empty path")
+	}
+	if req.Method != http.MethodPost {
+		t.Errorf("expected POST, got %s", req.Method)
+	}
+}
+
+func TestMergedContext_ValueFallback(t *testing.T) {
+	type keyType string
+	grpcKey := keyType("grpc-key")
+	httpKey := keyType("http-key")
+
+	grpcCtx := context.WithValue(context.Background(), grpcKey, "grpc-value")
+	httpCtx := context.WithValue(context.Background(), httpKey, "http-value")
+
+	merged := &mergedContext{
+		Context: grpcCtx,
+		httpCtx: httpCtx,
+	}
+
+	// gRPC context value should be found
+	if v := merged.Value(grpcKey); v != "grpc-value" {
+		t.Errorf("expected grpc-value, got %v", v)
+	}
+
+	// HTTP context value should be found via fallback
+	if v := merged.Value(httpKey); v != "http-value" {
+		t.Errorf("expected http-value via fallback, got %v", v)
+	}
+
+	// Non-existent key should return nil
+	if v := merged.Value(keyType("missing")); v != nil {
+		t.Errorf("expected nil for missing key, got %v", v)
+	}
 }

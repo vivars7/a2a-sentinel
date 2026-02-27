@@ -292,3 +292,11 @@ func TestWriteHTTPErrorSetsHeaderBeforeBody(t *testing.T) {
 		t.Errorf("Code = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
+
+func TestToJSONRPCError_502Mapping(t *testing.T) {
+	err := &SentinelError{Code: 502, Message: "Bad Gateway"}
+	rpcErr := ToJSONRPCError(err, "req-502")
+	if rpcErr.Error.Code != -32603 {
+		t.Errorf("expected -32603 for HTTP 502, got %d", rpcErr.Error.Code)
+	}
+}
