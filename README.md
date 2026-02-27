@@ -154,38 +154,38 @@ The gRPC binding translates A2A protocol messages to/from JSON-RPC internally. A
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│                  a2a-sentinel Gateway                      │
-│                                                            │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐│
-│  │ Security │→│ Policy   │→│ Protocol │→│  Router    ││
-│  │ Layer    │  │ Engine   │  │ Detector │  │           ││
-│  │(2-tier)  │  │ (ABAC)   │  │          │  │           ││
-│  └──────────┘  └──────────┘  └──────────┘  └───────────┘│
-│       │                                         │        │
-│  ┌─────────┐  ┌──────────────┐        ┌──────────────┐  │
-│  │  Audit  │  │ Agent Card   │        │    Proxy     │  │
-│  │  Logger │  │ Manager      │        │ HTTP/SSE/gRPC│  │
-│  │(OTel)   │  │(polling+agg) │        │             │  │
-│  └─────────┘  └──────────────┘        └──────────────┘  │
-│                                              │           │
-│  ┌────────────────────┐  ┌───────────────────────────┐  │
-│  │ gRPC Server (:8443)│  │ Config Hot-Reload         │  │
-│  │ A2A gRPC binding   │  │ SIGHUP + fsnotify watch   │  │
-│  │ ↔ JSON-RPC transl. │  │ Debounce + atomic swap    │  │
-│  └────────────────────┘  └───────────────────────────┘  │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │ MCP Server (127.0.0.1:8081) — 15 tools          │   │
-│  │ Read:  list_agents, get_agent_status,            │   │
-│  │        get_aggregated_card, health_check,        │   │
-│  │        get_config, get_audit_log, get_metrics    │   │
-│  │ Write: update_rate_limit, reload_config,         │   │
-│  │        toggle_agent, rotate_api_key,             │   │
-│  │        flush_replay_cache, trigger_card_poll     │   │
-│  │ Card:  list_pending_changes,                     │   │
-│  │        approve_card_change, reject_card_change   │   │
-│  │ Policy: list_policies, evaluate_policy           │   │
-│  └──────────────────────────────────────────────────┘   │
+│                   a2a-sentinel Gateway                    │
+│                                                           │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │ Security │→ │ Policy   │→ │ Protocol │→ │  Router  │   │
+│  │ Layer    │  │ Engine   │  │ Detector │  │          │   │
+│  │ (2-tier) │  │ (ABAC)   │  │          │  │          │   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+│       │                                        │          │
+│  ┌─────────┐  ┌──────────────┐        ┌──────────────┐    │
+│  │  Audit  │  │ Agent Card   │        │    Proxy     │    │
+│  │  Logger │  │ Manager      │        │ HTTP/SSE/gRPC│    │
+│  │ (OTel)  │  │ (polling+agg)│        │              │    │
+│  └─────────┘  └──────────────┘        └──────────────┘    │
+│                                              │            │
+│  ┌────────────────────┐  ┌───────────────────────────┐    │
+│  │ gRPC Server (:8443)│  │ Config Hot-Reload         │    │
+│  │ A2A gRPC binding   │  │ SIGHUP + fsnotify watch   │    │
+│  │ ↔ JSON-RPC transl. │  │ Debounce + atomic swap    │    │
+│  └────────────────────┘  └───────────────────────────┘    │
+│                                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ MCP Server (127.0.0.1:8081) — 15 tools             │   │
+│  │ Read:  list_agents, get_agent_status,               │  │
+│  │        get_aggregated_card, health_check,           │  │
+│  │        get_config, get_audit_log, get_metrics       │  │
+│  │ Write: update_rate_limit, reload_config,            │  │
+│  │        toggle_agent, rotate_api_key,                │  │
+│  │        flush_replay_cache, trigger_card_poll        │  │
+│  │ Card:  list_pending_changes,                        │  │
+│  │        approve_card_change, reject_card_change      │  │
+│  │ Policy: list_policies, evaluate_policy              │  │
+│  └─────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────┘
 ```
 
