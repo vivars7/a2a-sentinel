@@ -132,6 +132,9 @@ logging:
 | `security.rate_limit` | `RateLimit` CRD or Envoy filter | K8s CRD | Per-user limits via Envoy config |
 | `routing.mode: path-prefix` | `RoutePolicy` CRD | K8s CRD | `/agents/{name}/` → service routing |
 | `logging.format: json` | Observability integration | Datadog/Prometheus scrape | Enable JSON logs in deployment |
+| `listen.grpc_port` | Envoy gRPC listener | Envoy bootstrap or CRD | gRPC port → Envoy listener config |
+| `security.policies[]` | `AuthorizationPolicy` CRD | K8s CRD | See [Policy Engine Migration](#policy-engine-migration-notes) |
+| `reload.enabled` | K8s ConfigMap watch | K8s native | agentgateway auto-reloads on ConfigMap changes |
 
 ---
 
@@ -381,6 +384,9 @@ The migrate command produces agentgateway-compatible YAML with Agent definitions
 | `security.rate_limit.user.burst` | `RateLimit.spec.rateLimit.burst` | Direct mapping |
 | `routing.mode: path-prefix` | `RoutePolicy` with path matching | Converted to K8s route rules |
 | `logging.format: json` | Observability config | Enable structured logging in deployment |
+| `listen.grpc_port` | Envoy gRPC listener | Port mapped to Envoy listener |
+| `security.policies[]` | `AuthorizationPolicy` CRDs | Best-effort conversion, review required |
+| `reload.*` | K8s ConfigMap watch | agentgateway auto-reloads |
 
 ### What the Tool Does NOT Convert
 
@@ -390,6 +396,9 @@ The following require manual configuration in agentgateway:
 - **Replay prevention**: Not a standard agentgateway feature (use API gateway layer)
 - **MCP server**: agentgateway has its own management interface
 - **Metrics**: Configure Prometheus ServiceMonitor separately
+- **Time-based policies**: No built-in equivalent in agentgateway (use OPA sidecar)
+- **Header-based policies**: Map manually to Envoy HeaderMatcher rules
+- **gRPC reflection**: Configure via Envoy gRPC filters
 
 ### Post-Migration Checklist
 
@@ -467,6 +476,123 @@ a2a-sentinel handles moderate scale:
 3. **Add caching layer** — Put a CDN or cache proxy in front for repeated Agent Card fetches
 
 agentgateway is designed for **managed scale** (K8s handling resource allocation, rollouts, etc.). If you want **manual scale** without K8s, sentinel + simple load balancing is a valid long-term choice.
+
+---
+
+## gRPC Migration Notes
+
+### sentinel gRPC vs agentgateway gRPC
+
+Both sentinel and agentgateway support the A2A gRPC binding, but they handle it differently:
+
+| Aspect | sentinel (v0.3) | agentgateway |
+|--------|----------------|--------------|
+| **gRPC port** | Separate port (default 8443) | Shared Envoy listener with route rules |
+| **Backend protocol** | Always HTTP (sentinel translates gRPC→JSON-RPC) | Native gRPC pass-through or translation |
+| **Proto definitions** | Bundled in `proto/a2a/v1/` | Managed via Envoy proto descriptors |
+| **TLS** | Configurable per-port | Managed by K8s Ingress/cert-manager |
+| **Reflection** | Built-in gRPC reflection toggle | Envoy gRPC-web filter |
+| **Load balancing** | Single instance | K8s Service + Envoy L7 balancing |
+
+### What Transfers
+
+- **gRPC clients**: Same proto definitions, same RPC methods. Change the target address from sentinel to agentgateway.
+- **Error codes**: Both use standard gRPC status codes. Educational hints are in the `Status.details` field.
+- **Streaming**: Both support server-streaming for `message/stream`. Client code works unchanged.
+
+### What Changes
+
+- **Port configuration**: sentinel uses a dedicated `listen.grpc_port`. agentgateway routes gRPC via Envoy listeners configured in K8s CRDs.
+- **TLS termination**: sentinel handles TLS directly. agentgateway uses K8s Ingress or Envoy SDS for certificate management.
+- **Backend agents**: In sentinel, backends are always HTTP (sentinel translates). In agentgateway, backends can be native gRPC if desired.
+
+### Migration Steps for gRPC
+
+1. **Export gRPC config**: The `sentinel migrate` command includes gRPC port mapping in the output
+2. **Update client targets**: Change gRPC target from `sentinel-host:8443` to `agentgateway-host:443`
+3. **Verify proto compatibility**: Both use the same A2A proto definitions
+4. **Test with grpcurl**: Run the same grpcurl commands against agentgateway to verify
+
+```bash
+# Same command works against both gateways
+grpcurl -plaintext -d '{
+  "message": {
+    "role": "user",
+    "parts": [{"text": "Hello!"}],
+    "messageId": "msg-1"
+  }
+}' agentgateway-host:443 a2a.v1.A2AService/SendMessage
+```
+
+---
+
+## Policy Engine Migration Notes
+
+### sentinel ABAC vs agentgateway Authorization
+
+sentinel's ABAC policy engine provides fine-grained access control at the gateway level. When migrating to agentgateway, policies map to different K8s-native authorization mechanisms.
+
+| sentinel Policy | agentgateway Equivalent | Notes |
+|----------------|------------------------|-------|
+| `source_ip` (CIDR rules) | K8s `NetworkPolicy` + Envoy RBAC | Network-level enforcement |
+| `user` / `user_not` | `AuthorizationPolicy` CRD | JWT claim-based authorization |
+| `agent` (agent-specific) | `RoutePolicy` + `AuthorizationPolicy` | Per-route authorization rules |
+| `method` (A2A method) | `AuthorizationPolicy` with path matching | Method mapped to path rules |
+| `time` (time-based) | External policy engine (OPA) | Not built into agentgateway |
+| `header` / `header_missing` | Envoy header matching in `RoutePolicy` | Header-based routing rules |
+
+### What the Migrate Tool Converts
+
+The `sentinel migrate` command performs best-effort policy conversion:
+
+- **IP-based rules** → K8s `NetworkPolicy` manifests
+- **User-based rules** → `AuthorizationPolicy` CRD with JWT claim matching
+- **Agent-based rules** → Per-route `AuthorizationPolicy` with selector labels
+
+### What Requires Manual Work
+
+- **Time-based policies**: agentgateway does not have built-in time-of-day restrictions. Use OPA (Open Policy Agent) sidecar or an external policy service
+- **Header-based rules**: Map to Envoy `HeaderMatcher` in route configuration. The migrate tool outputs these as comments for manual review
+- **Complex combinations**: Policies with multiple condition types may need to be split across multiple K8s resources
+
+### Example: Converting a sentinel Policy to agentgateway
+
+**sentinel policy:**
+```yaml
+security:
+  policies:
+    - name: restrict-internal-agent
+      priority: 30
+      effect: deny
+      conditions:
+        agent: ["internal-agent"]
+        user_not: ["admin@example.com"]
+```
+
+**agentgateway equivalent (AuthorizationPolicy CRD):**
+```yaml
+apiVersion: security.agentgateway.io/v1alpha1
+kind: AuthorizationPolicy
+metadata:
+  name: restrict-internal-agent
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      agent: internal-agent
+  rules:
+    - from:
+        - source:
+            notRequestPrincipals: ["admin@example.com"]
+      to:
+        - operation:
+            paths: ["/agents/internal-agent/*"]
+  action: DENY
+```
+
+### Recommendation
+
+Before migrating, document all your sentinel policies and test them against agentgateway's authorization model. Run both gateways in parallel during migration to verify policy behavior matches.
 
 ---
 

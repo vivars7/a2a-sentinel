@@ -23,7 +23,8 @@ a2a-sentinel is not trying to replace [agentgateway](https://github.com/solo-io/
 | **Security** | Configurable | ON by default |
 | **First request** | ~30 min (K8s setup) | ~5 min (docker compose up) |
 | **Error messages** | Standard codes | Educational (hint + docs_url) |
-| **Management** | K8s tools | MCP server (13 tools, v0.2) |
+| **Bindings** | gRPC + REST + JSON-RPC | JSON-RPC + REST + gRPC (v0.3) |
+| **Management** | K8s tools | MCP server (15 tools, v0.3) |
 | **Migration** | — | Zero-effort (same A2A protocol) |
 
 ---
@@ -46,6 +47,11 @@ a2a-sentinel is not trying to replace [agentgateway](https://github.com/solo-io/
 - [x] sentinel migrate command (-> agentgateway)
 - [x] Card change approve mode (MCP-based)
 - [x] Prometheus-compatible metrics endpoint (/metrics)
+- [x] gRPC binding support with JSON-RPC protocol translation
+- [x] Config hot-reload (SIGHUP + file watch with debounce)
+- [x] Extended Prometheus metrics with histograms (prometheus/client_golang)
+- [x] Helm chart for Kubernetes deployment
+- [x] ABAC policy engine (IP, user, agent, method, time-based, header rules)
 
 ---
 
@@ -128,38 +134,59 @@ curl -N -X POST http://localhost:8080/agents/streaming/ \
 
 Each chunk arrives as a separate SSE event. The gateway drains all outstanding streams on graceful shutdown.
 
+**gRPC binding (requires grpcurl):**
+
+```bash
+grpcurl -plaintext -d '{
+  "message": {
+    "role": "user",
+    "parts": [{"text": "Hello via gRPC!"}],
+    "messageId": "msg-3"
+  }
+}' localhost:8443 a2a.v1.A2AService/SendMessage
+```
+
+The gRPC binding translates A2A protocol messages to/from JSON-RPC internally. Agents do not need gRPC support -- sentinel handles the translation.
+
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│               a2a-sentinel Gateway                    │
-│                                                       │
-│  ┌──────────┐  ┌──────────┐  ┌────────┐  ┌─────────┐│
-│  │ Security │→│ Protocol │→│ Router │→│  Proxy   ││
-│  │ Layer    │  │ Detector │  │        │  │HTTP/SSE ││
-│  │(2-tier)  │  │          │  │        │  │         ││
-│  └──────────┘  └──────────┘  └────────┘  └─────────┘│
-│       │              │                        │       │
-│  ┌─────────┐  ┌──────────────┐        ┌────────────┐│
-│  │  Audit  │  │ Agent Card   │        │  Backend   ││
-│  │  Logger │  │ Manager      │        │  Agents    ││
-│  │(OTel)   │  │(polling+agg) │        │(HTTP+SSE)  ││
-│  └─────────┘  └──────────────┘        └────────────┘│
-│                                                       │
-│  ┌──────────────────────────────────────────────────┐│
-│  │ MCP Server (127.0.0.1:8081) — 13 tools          ││
-│  │ Read:  list_agents, get_agent_status,            ││
-│  │        get_aggregated_card, health_check,        ││
-│  │        get_config, get_audit_log, get_metrics    ││
-│  │ Write: update_rate_limit, reload_config,         ││
-│  │        toggle_agent, rotate_api_key,             ││
-│  │        flush_replay_cache, trigger_card_poll     ││
-│  │ Card:  list_pending_changes,                     ││
-│  │        approve_card_change, reject_card_change   ││
-│  └──────────────────────────────────────────────────┘│
-└──────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│                  a2a-sentinel Gateway                      │
+│                                                            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐│
+│  │ Security │→│ Policy   │→│ Protocol │→│  Router    ││
+│  │ Layer    │  │ Engine   │  │ Detector │  │           ││
+│  │(2-tier)  │  │ (ABAC)   │  │          │  │           ││
+│  └──────────┘  └──────────┘  └──────────┘  └───────────┘│
+│       │                                         │        │
+│  ┌─────────┐  ┌──────────────┐        ┌──────────────┐  │
+│  │  Audit  │  │ Agent Card   │        │    Proxy     │  │
+│  │  Logger │  │ Manager      │        │ HTTP/SSE/gRPC│  │
+│  │(OTel)   │  │(polling+agg) │        │             │  │
+│  └─────────┘  └──────────────┘        └──────────────┘  │
+│                                              │           │
+│  ┌────────────────────┐  ┌───────────────────────────┐  │
+│  │ gRPC Server (:8443)│  │ Config Hot-Reload         │  │
+│  │ A2A gRPC binding   │  │ SIGHUP + fsnotify watch   │  │
+│  │ ↔ JSON-RPC transl. │  │ Debounce + atomic swap    │  │
+│  └────────────────────┘  └───────────────────────────┘  │
+│                                                          │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ MCP Server (127.0.0.1:8081) — 15 tools          │   │
+│  │ Read:  list_agents, get_agent_status,            │   │
+│  │        get_aggregated_card, health_check,        │   │
+│  │        get_config, get_audit_log, get_metrics    │   │
+│  │ Write: update_rate_limit, reload_config,         │   │
+│  │        toggle_agent, rotate_api_key,             │   │
+│  │        flush_replay_cache, trigger_card_poll     │   │
+│  │ Card:  list_pending_changes,                     │   │
+│  │        approve_card_change, reject_card_change   │   │
+│  │ Policy: list_policies, evaluate_policy           │   │
+│  └──────────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────────────┘
 ```
 
 ### Component Breakdown
@@ -176,9 +203,13 @@ Identifies incoming request as JSON-RPC, REST, or Agent Card fetch based on meth
 - `path-prefix`: `/agents/{name}/` → agent named `name`
 - `single`: all traffic → one default agent
 
+**Policy Engine (ABAC):**
+Attribute-based access control with priority-ordered rules. Supports IP, user, agent, method, time-based, and header conditions. Rules are hot-reloadable via config reload.
+
 **Proxy:**
 - **HTTP**: Standard A2A JSON-RPC and REST binding forwarding
 - **SSE**: Maintains goroutine per stream, demuxes chunks, gracefully drains on shutdown
+- **gRPC**: Accepts A2A gRPC calls on a separate port, translates to/from JSON-RPC for backend agents
 
 **Agent Card Manager:**
 - Polls each agent's `/.well-known/agent.json` (configurable interval)
@@ -240,6 +271,59 @@ logging:
 # Output: config valid
 ```
 
+### gRPC Binding
+
+```yaml
+listen:
+  grpc_port: 8443          # Separate port for gRPC connections
+
+grpc:
+  enabled: true
+  max_message_size: 4MB     # Max gRPC message size
+  reflection: true          # Enable gRPC server reflection
+```
+
+gRPC clients connect on the gRPC port. Sentinel translates A2A gRPC calls to JSON-RPC internally and forwards to backend agents over HTTP. No gRPC support is required from agents.
+
+### Config Hot-Reload
+
+```yaml
+reload:
+  enabled: true
+  watch: true               # Enable fsnotify file watching
+  debounce: 2s              # Debounce interval for file changes
+```
+
+Send `SIGHUP` to the sentinel process or rely on automatic file watching. Only reloadable fields (rate limits, policies, logging, agents) are updated. Non-reloadable fields (listen ports, TLS, auth mode) require a restart.
+
+### Policy Engine (ABAC)
+
+```yaml
+security:
+  policies:
+    - name: block-internal-ips
+      priority: 10
+      effect: deny
+      conditions:
+        source_ip:
+          cidr: ["192.168.0.0/16"]
+    - name: business-hours-only
+      priority: 20
+      effect: deny
+      conditions:
+        time:
+          outside: "09:00-17:00"
+          timezone: "America/New_York"
+    - name: restrict-agent-access
+      priority: 30
+      effect: deny
+      conditions:
+        agent: ["internal-agent"]
+        user_not: ["admin@example.com"]
+```
+
+See [docs/SECURITY.md](docs/SECURITY.md) for full policy engine documentation.
+
 ### Full Schema
 
 See `sentinel.yaml.example` for all available options including:
@@ -248,9 +332,12 @@ See `sentinel.yaml.example` for all available options including:
 - **security.rate_limit**: IP limits, user limits, per-agent limits, cleanup intervals
 - **security.replay**: Nonce tracking (memory or Redis), configurable window
 - **security.push**: SSRF defense (block private networks), allowed domains, HMAC signing
+- **security.policies**: ABAC rules with IP, user, agent, method, time, header conditions
 - **body_inspection**: Max body size, skip for streaming requests
 - **card**: Aggregation mode, JWK file for signing
 - **logging**: Audit sampling, max body log size, output format
+- **grpc**: gRPC binding port, max message size, reflection
+- **reload**: Hot-reload settings (watch, debounce)
 - **mcp**: Port, auth token, enabled flag
 
 ---
@@ -316,6 +403,42 @@ Configurable sampling rates reduce noise in high-volume environments.
 
 ---
 
+## Helm Chart (Kubernetes)
+
+Deploy a2a-sentinel to Kubernetes using the included Helm chart:
+
+```bash
+# Install from local chart
+helm install sentinel deploy/helm/a2a-sentinel/ \
+  --namespace sentinel-system \
+  --create-namespace \
+  --set config.agents[0].name=echo \
+  --set config.agents[0].url=http://echo-agent:9000
+
+# Or with a values file
+helm install sentinel deploy/helm/a2a-sentinel/ \
+  --namespace sentinel-system \
+  --create-namespace \
+  -f my-values.yaml
+
+# Upgrade
+helm upgrade sentinel deploy/helm/a2a-sentinel/ \
+  --namespace sentinel-system \
+  -f my-values.yaml
+```
+
+The chart includes:
+- Deployment with configurable replicas and resource limits
+- Service for HTTP (8080) and gRPC (8443) ports
+- ConfigMap for sentinel.yaml
+- Optional ServiceMonitor for Prometheus scraping
+- Optional Ingress resource
+- Pod disruption budget for high availability
+
+See `deploy/helm/a2a-sentinel/values.yaml` for all chart configuration options.
+
+---
+
 ## Building from Source
 
 ### Requirements
@@ -370,22 +493,30 @@ a2a-sentinel/
 ├── cmd/sentinel/
 │   ├── main.go              # CLI entrypoint (serve, validate, init, migrate)
 │   └── main_test.go
+├── proto/
+│   └── a2a/v1/              # A2A gRPC service definitions (.proto)
+├── gen/
+│   └── a2a/v1/              # Generated Go code from proto definitions
 ├── internal/
-│   ├── config/              # YAML parsing, validation, dev/prod profiles
+│   ├── config/              # YAML parsing, validation, dev/prod profiles, hot-reload
 │   ├── ctxkeys/             # context.Context key definitions
-│   ├── errors/              # SentinelError type + HTTP/JSON-RPC mapping
+│   ├── errors/              # SentinelError type + HTTP/JSON-RPC/gRPC mapping
 │   ├── health/              # /healthz, /readyz handlers
 │   ├── server/              # HTTP server integration, graceful shutdown
+│   ├── grpc/                # gRPC server, interceptors, JSON-RPC translation
 │   ├── protocol/            # A2A types, Protocol Detector, body inspection
-│   ├── security/            # Auth, rate limiting, SSRF defense
-│   ├── proxy/               # HTTP and SSE proxies (no ReverseProxy)
+│   ├── security/            # Auth, rate limiting, SSRF defense, policy engine
+│   ├── proxy/               # HTTP, SSE, and gRPC proxies (no ReverseProxy)
 │   ├── router/              # path-prefix and single-agent routing
 │   ├── agentcard/           # Agent Card polling, caching, aggregation
-│   ├── audit/               # OTel-compatible audit logging
-│   └── mcpserver/           # MCP server (13 tools, read + write + card approval)
+│   ├── audit/               # OTel-compatible audit logging, Prometheus metrics
+│   └── mcpserver/           # MCP server (15 tools, read + write + card + policy)
+├── deploy/
+│   └── helm/a2a-sentinel/   # Helm chart for Kubernetes deployment
 ├── examples/
 │   ├── echo-agent/          # Synchronous demo agent (Python)
-│   └── streaming-agent/     # SSE streaming demo agent (Python)
+│   ├── streaming-agent/     # SSE streaming demo agent (Python)
+│   └── grafana/             # Grafana dashboard JSON
 ├── docs/
 │   ├── ARCHITECTURE.md      # System architecture and request flow
 │   ├── SECURITY.md          # Security model and threat defenses
@@ -458,7 +589,7 @@ See [docs/MIGRATION.md](docs/MIGRATION.md) for the full migration guide.
 - Health checks (/healthz, /readyz)
 - MCP server (read-only, 3 tools)
 
-**v0.2 (Current)**
+**v0.2**
 - Full MCP server (13 tools: read + write + card approval)
 - JWS Agent Card signature verification
 - SSRF protection for push notifications
@@ -468,14 +599,18 @@ See [docs/MIGRATION.md](docs/MIGRATION.md) for the full migration guide.
 - Prometheus-compatible metrics endpoint (/metrics)
 - Security integration test suite
 
-**v0.3 (Planned)**
-- gRPC binding support (in addition to JSON-RPC and REST)
+**v0.3 (Current)**
+- gRPC binding support with JSON-RPC protocol translation
+- Config hot-reload (SIGHUP + fsnotify file watch with debounce)
+- Extended Prometheus metrics with histograms (prometheus/client_golang)
+- Grafana dashboard example
 - Helm chart for Kubernetes deployment
-- Policy engine (attribute-based access control)
-- OTel SDK integration (Jaeger, Datadog)
+- ABAC policy engine (IP, user, agent, method, time-based, header rules)
+- Policy evaluation MCP tools
 
-**v1.0**
+**v1.0 (Planned)**
 - OPA policy integration
+- OTel SDK integration (Jaeger, Datadog)
 - Multi-tenancy support
 - A2A Technology Compatibility Kit (TCK) integration
 

@@ -560,6 +560,79 @@ See [Rate Limiting Configuration](../docs/SECURITY.md#rate-limiting) for advance
 
 ---
 
+#### ErrPolicyViolation
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 403 |
+| **JSON-RPC Code** | -32001 |
+| **Message** | Request denied by policy |
+| **Hint** | Policy '{policy_name}' denied this request. Contact admin for access |
+| **DocsURL** | https://a2a-sentinel.dev/docs/policies |
+
+**When it occurs:**
+- A request matches a `deny` rule in the ABAC policy engine
+- The policy conditions (IP, user, agent, method, time, headers) matched the request attributes
+- The matching rule has the highest priority (lowest number) among all matching rules
+
+**Example error response:**
+```json
+{
+  "error": {
+    "code": 403,
+    "message": "Request denied by policy",
+    "hint": "Policy 'business-hours-only' denied this request. Contact admin for access",
+    "docs_url": "https://a2a-sentinel.dev/docs/policies"
+  }
+}
+```
+
+**JSON-RPC error response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-id",
+  "error": {
+    "code": -32001,
+    "message": "Request denied by policy",
+    "data": {
+      "code": 403,
+      "message": "Request denied by policy",
+      "hint": "Policy 'business-hours-only' denied this request. Contact admin for access",
+      "docs_url": "https://a2a-sentinel.dev/docs/policies"
+    }
+  }
+}
+```
+
+**How to fix:**
+1. **Identify the policy**: The hint includes the policy name that blocked the request
+2. **Check policy conditions**: Review the policy in `sentinel.yaml`:
+   ```yaml
+   security:
+     policies:
+       - name: business-hours-only
+         priority: 20
+         effect: deny
+         conditions:
+           time:
+             outside: "09:00-17:00"
+   ```
+3. **Test policies**: Use the MCP tool to evaluate policies against a simulated request:
+   ```
+   MCP tool: evaluate_policy {
+     "source_ip": "203.0.113.50",
+     "user": "test@example.com",
+     "agent": "echo",
+     "method": "message/send"
+   }
+   ```
+4. **Update policies**: Modify conditions or add an allow rule with higher priority (lower number)
+5. **Reload**: Send SIGHUP or use `reload_config` MCP tool to apply changes without restart
+6. See [Policy Engine](./SECURITY.md#policy-engine-abac) for full documentation
+
+---
+
 ### Agent & Routing
 
 #### ErrNoRoute
@@ -744,6 +817,7 @@ When a SentinelError is converted to a JSON-RPC error response, the HTTP status 
 | 202 | — | (Not an error) | ErrCardChangePending (audit log only) |
 | 400 | -32600 | Invalid Request | ErrInvalidRequest |
 | 401 | -32600 | Invalid Request | ErrAuthRequired, ErrAuthInvalid, ErrCardSignatureInvalid |
+| 403 | -32001 | Policy violation | ErrPolicyViolation |
 | 403 | -32600 | Invalid Request | ErrForbidden, ErrSSRFBlocked, ErrMCPUnauthorized |
 | 404 | -32601 | Method not found | ErrNoRoute |
 | 409 | -32600 | Invalid Request | ErrReplayDetected |
@@ -751,6 +825,69 @@ When a SentinelError is converted to a JSON-RPC error response, the HTTP status 
 | 503 | -32603 | Internal error | ErrAgentUnavailable, ErrGlobalLimitReached |
 
 **Note:** The original HTTP code is preserved in the `data.code` field of the JSON-RPC error response, allowing clients to make decisions based on the actual HTTP status.
+
+**Policy violations** use the dedicated JSON-RPC code `-32001` (distinct from the general `-32600` used by other 403 errors) to allow clients to distinguish policy denials from other authorization failures.
+
+---
+
+## gRPC Error Code Mapping
+
+When sentinel handles gRPC requests, errors are mapped between gRPC status codes, HTTP status codes, and JSON-RPC error codes. The educational `hint` and `docs_url` are included in the gRPC `Status.details` field.
+
+### gRPC → HTTP/JSON-RPC
+
+| gRPC Code | HTTP Status | JSON-RPC Code | When |
+|-----------|-------------|---------------|------|
+| `OK` (0) | 200 | — | Successful request |
+| `CANCELLED` (1) | 499 | -32600 | Client cancelled the request |
+| `INVALID_ARGUMENT` (3) | 400 | -32600 | Malformed request (bad proto, missing fields) |
+| `NOT_FOUND` (5) | 404 | -32601 | No matching agent route |
+| `ALREADY_EXISTS` (6) | 409 | -32600 | Replay attack detected |
+| `PERMISSION_DENIED` (7) | 403 | -32001 | Policy violation or access denied |
+| `RESOURCE_EXHAUSTED` (8) | 429 | -32600 | Rate limit exceeded |
+| `UNAUTHENTICATED` (16) | 401 | -32600 | Missing or invalid credentials |
+| `UNAVAILABLE` (14) | 503 | -32603 | Agent unavailable or gateway overloaded |
+| `INTERNAL` (13) | 500 | -32603 | Internal server error |
+
+### HTTP → gRPC (reverse mapping)
+
+When sentinel translates backend HTTP responses to gRPC:
+
+| HTTP Status | gRPC Code | Notes |
+|-------------|-----------|-------|
+| 200 | `OK` | Successful response |
+| 400 | `INVALID_ARGUMENT` | Request validation failure |
+| 401 | `UNAUTHENTICATED` | Authentication required or invalid |
+| 403 | `PERMISSION_DENIED` | Policy denial or forbidden |
+| 404 | `NOT_FOUND` | No route or agent not found |
+| 408 | `DEADLINE_EXCEEDED` | Backend request timeout |
+| 409 | `ALREADY_EXISTS` | Replay detection |
+| 429 | `RESOURCE_EXHAUSTED` | Rate limit hit |
+| 500 | `INTERNAL` | Backend internal error |
+| 502 | `UNAVAILABLE` | Backend unreachable |
+| 503 | `UNAVAILABLE` | Gateway or backend overloaded |
+
+### gRPC Error Response Format
+
+```
+Status {
+  code: PERMISSION_DENIED
+  message: "Request denied by policy"
+  details: [
+    ErrorInfo {
+      reason: "POLICY_VIOLATION"
+      domain: "a2a-sentinel"
+      metadata: {
+        "hint": "Policy 'business-hours-only' denied this request. Contact admin for access"
+        "docs_url": "https://a2a-sentinel.dev/docs/policies"
+        "policy_name": "business-hours-only"
+      }
+    }
+  ]
+}
+```
+
+The `ErrorInfo.metadata` map preserves sentinel's educational error fields (hint, docs_url) across the gRPC protocol boundary.
 
 ---
 

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -427,7 +426,6 @@ func TestConfigReloader_DebounceMultipleWrites(t *testing.T) {
 	logger, _ := newTestLogger()
 	reloader := NewConfigReloader(cfgPath, initialCfg, logger)
 
-	var reloadCount atomic.Int32
 	sub := &testSubscriber{}
 	reloader.Register(sub)
 
@@ -449,8 +447,6 @@ func TestConfigReloader_DebounceMultipleWrites(t *testing.T) {
 
 	// Wait for debounce + processing
 	time.Sleep(600 * time.Millisecond)
-
-	_ = reloadCount // suppress unused warning
 
 	// Should have been debounced to 1-2 reloads (not 5)
 	count := sub.callCount()

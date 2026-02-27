@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.0] - 2026-02-27
+
+### Added
+- gRPC binding support with JSON-RPC protocol translation (`internal/grpc/`, `proto/`)
+- Config hot-reload via SIGHUP signal and fsnotify file watch with debounce (`internal/config/reload.go`)
+- Extended Prometheus metrics with proper histograms using prometheus/client_golang (`internal/audit/prometheus.go`)
+- Grafana dashboard example (`examples/grafana/sentinel-dashboard.json`)
+- Helm chart for Kubernetes deployment (`deploy/helm/a2a-sentinel/`)
+- ABAC policy engine with IP, user, agent, method, time-based, and header rules (`internal/security/policy.go`)
+- Policy evaluation MCP tools: `list_policies`, `evaluate_policy`
+- gRPC-specific Prometheus metrics (grpc_requests_total, grpc_request_duration_seconds)
+- Config reload metrics and timestamps (config_reload_total, config_last_reload_timestamp)
+- Security block reason tracking metrics (security_blocks_total by reason)
+- Upstream latency histogram metrics (upstream_request_duration_seconds)
+- Build info metric (build_info with version, go_version, commit labels)
+- gRPC health checking protocol support
+- Separate gRPC listen port configuration (`listen.grpc_port`)
+
+### Changed
+- Metrics endpoint now uses prometheus/client_golang instead of hand-rolled exposition format
+- Prometheus metrics expanded from 6 to 15+ metric families
+- Configuration system now separates reloadable vs non-reloadable fields
+- Security pipeline now includes PolicyGuard stage after authentication
+
 ## [0.2.0] - 2026-02-27
 
 ### Added

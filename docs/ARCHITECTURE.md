@@ -8,11 +8,13 @@ a2a-sentinel is a lightweight, security-first A2A (Agent-to-Agent) protocol gate
 3. [Component Overview](#component-overview)
 4. [Security Pipeline](#security-pipeline)
 5. [Proxy Architecture](#proxy-architecture)
-6. [Metrics Endpoint](#metrics-endpoint)
-7. [Configuration System](#configuration-system)
-8. [CLI Subcommands](#cli-subcommands)
-9. [Design Principles](#design-principles)
-10. [Graceful Shutdown](#graceful-shutdown)
+6. [gRPC Proxy](#grpc-proxy)
+7. [Metrics Endpoint](#metrics-endpoint)
+8. [Config Hot-Reload](#config-hot-reload)
+9. [Configuration System](#configuration-system)
+10. [CLI Subcommands](#cli-subcommands)
+11. [Design Principles](#design-principles)
+12. [Graceful Shutdown](#graceful-shutdown)
 
 ---
 
@@ -21,18 +23,18 @@ a2a-sentinel is a lightweight, security-first A2A (Agent-to-Agent) protocol gate
 ### System Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Client Request                          │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
+┌──────────────────────────┐   ┌──────────────────────────┐
+│   HTTP/SSE Client (:8080)│   │   gRPC Client (:8443)    │
+└────────────┬─────────────┘   └────────────┬─────────────┘
+             │                              │
+             ▼                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Sentinel Security Gateway                      │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ 1. Protocol Detection                                      │ │
-│  │    (JSON-RPC vs REST vs SSE)                              │ │
+│  │    (JSON-RPC vs REST vs SSE vs gRPC)                      │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                               │                                  │
 │                               ▼                                  │
@@ -46,20 +48,32 @@ a2a-sentinel is a lightweight, security-first A2A (Agent-to-Agent) protocol gate
 │                               │                                  │
 │                               ▼                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │ 3. Router                                                  │ │
+│  │ 3. PolicyGuard (ABAC)                                      │ │
+│  │    IP, user, agent, method, time, header rule evaluation  │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                               │                                  │
+│                               ▼                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ 4. Router                                                  │ │
 │  │    (Path-prefix or Single agent routing)                  │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                               │                                  │
 │                               ▼                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │ 4. Proxy                                                   │ │
-│  │    HTTP Forward / SSE Streaming (no httputil.ReverseProxy)│ │
+│  │ 5. Proxy                                                   │ │
+│  │    HTTP / SSE / gRPC (no httputil.ReverseProxy)           │ │
+│  │    gRPC ↔ JSON-RPC translation for backend agents         │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                               │                                  │
 │                               ▼                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │ 5. Audit Logging (OTel-compatible)                         │ │
+│  │ 6. Audit Logging (OTel-compatible) + Prometheus Metrics   │ │
 │  │    All decisions recorded with structured fields           │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ Config Hot-Reload (SIGHUP + fsnotify)                      │ │
+│  │    Validate → Diff → Atomic Swap → Notify components      │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                                                                   │
 └─────────────────────────────────────────────────────────────────┘
@@ -68,6 +82,7 @@ a2a-sentinel is a lightweight, security-first A2A (Agent-to-Agent) protocol gate
 ┌─────────────────────────────────────────────────────────────────┐
 │                 Backend Agent(s)                                │
 │  (echo, streaming, or any A2A-compliant service)              │
+│  (always HTTP — gRPC translation handled by sentinel)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -295,9 +310,10 @@ Request Flow:
 ├──────────────────────────────────────────────────┤
 │ 4. AuthMiddleware       → JWT/API-Key validation│
 │ 5. UserRateLimiter      → Max M req/sec per user│
-│ 6. JWSVerifier          → Agent Card JWS check  │
-│ 7. ReplayDetector       → Nonce + timestamp      │
-│ 8. SSRFChecker          → Private network block  │
+│ 6. PolicyGuard (ABAC)   → Policy rule evaluation│
+│ 7. JWSVerifier          → Agent Card JWS check  │
+│ 8. ReplayDetector       → Nonce + timestamp      │
+│ 9. SSRFChecker          → Private network block  │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -335,6 +351,57 @@ Request Flow:
   - Validates against domain allowlist
   - Enforces HTTPS requirement
   - Configurable: `security.push.block_private_networks`, `security.push.allowed_domains`
+
+- **PolicyGuard** — ABAC policy engine middleware
+  - Evaluates attribute-based access control rules after authentication
+  - Supports conditions: source IP (CIDR + negation), user, agent, method, time-of-day, HTTP headers
+  - Priority-ordered rule evaluation (lowest priority number = evaluated first)
+  - Effects: `allow` or `deny` with first-match semantics
+  - Policies are hot-reloadable via config reload (no restart required)
+  - Configurable: `security.policies[]` with name, priority, effect, and conditions
+  - See [SECURITY.md](./SECURITY.md#policy-engine-abac) for full documentation
+
+### `grpc/` — gRPC Server and Protocol Translation
+
+Implements the A2A gRPC binding, accepting gRPC calls on a separate port and translating them to JSON-RPC for backend agents.
+
+**Key components:**
+
+- **gRPC Server** — Listens on `listen.grpc_port` (default 8443)
+  - Implements the `a2a.v1.A2AService` gRPC service
+  - Methods: `SendMessage`, `StreamMessage`, `GetAgentCard`
+  - Supports gRPC server reflection for tooling (grpcurl, grpcui)
+
+- **JSON-RPC Translator** — Bidirectional translation
+  - gRPC request → JSON-RPC 2.0 request → forward to backend agent via HTTP
+  - JSON-RPC 2.0 response → gRPC response → return to gRPC client
+  - Preserves error codes and educational hints across protocol boundaries
+
+- **Interceptors** — gRPC middleware chain
+  - Authentication interceptor (reuses HTTP auth pipeline)
+  - Rate limiting interceptor (shares token buckets with HTTP)
+  - Policy evaluation interceptor (same ABAC rules apply)
+  - Audit logging interceptor (OTel-compatible, same format as HTTP)
+
+**Protocol Translation Flow:**
+```
+gRPC Client
+    ↓ (protobuf)
+gRPC Server (:8443)
+    ↓
+JSON-RPC Translator
+    ↓ (JSON-RPC 2.0 over HTTP)
+Backend Agent (HTTP)
+    ↓ (JSON-RPC 2.0 response)
+JSON-RPC Translator
+    ↓ (protobuf)
+gRPC Client
+```
+
+**Design:**
+- Agents do not need gRPC support — sentinel handles all translation
+- gRPC and HTTP share the same security pipeline, routing, and audit logging
+- gRPC-specific Prometheus metrics track gRPC request counts and latency separately
 
 ### `proxy/` — HTTP and SSE Proxying
 
@@ -513,7 +580,7 @@ Optional MCP (Model Context Protocol) server for gateway management.
 - Disabled by default (`mcp.enabled: true` to enable)
 - Listens on 127.0.0.1 only (local access)
 - Token-based authentication for write operations (optional)
-- 13 tools (read + write + card approval), 4 resources
+- 15 tools (read + write + card approval + policy), 4 resources
 
 **Read tools** (no auth required):
 - `list_agents` — List all configured agents with health status
@@ -536,6 +603,10 @@ Optional MCP (Model Context Protocol) server for gateway management.
 - `list_pending_changes` — List pending Agent Card changes
 - `approve_card_change` — Approve a pending card change
 - `reject_card_change` — Reject a pending card change
+
+**Policy tools** (auth token required):
+- `list_policies` — List all configured ABAC policies with priority and conditions
+- `evaluate_policy` — Test a policy against a simulated request context
 
 **Resources** (4):
 - `sentinel://config` — Current configuration
@@ -564,6 +635,7 @@ Layer 1: PRE-AUTH (fast termination paths)
 Layer 2: POST-AUTH
   └─ AuthMiddleware (JWT, API Key, passthrough)
      └─ UserRateLimiter (max requests/sec per user)
+     └─ PolicyGuard (ABAC policy evaluation)
      └─ JWSVerifier (Agent Card signature verification)
      └─ ReplayDetector (nonce + timestamp validation)
      └─ SSRFChecker (push notification SSRF protection)
@@ -742,25 +814,189 @@ Client disconnects (or idle timeout)
 
 ---
 
+## gRPC Proxy
+
+a2a-sentinel supports the A2A gRPC binding on a separate port (default 8443). The gRPC server translates between the A2A protobuf format and JSON-RPC 2.0 for backend agents.
+
+### gRPC Request Flow
+
+```
+1. gRPC client calls a2a.v1.A2AService/SendMessage
+   → protobuf SendMessageRequest
+
+2. gRPC interceptor chain executes:
+   → Authentication (same JWT/API-Key/passthrough modes)
+   → Rate limiting (shared token buckets with HTTP)
+   → Policy evaluation (same ABAC rules)
+   → Audit logging
+
+3. JSON-RPC Translator converts request:
+   → SendMessageRequest protobuf → JSON-RPC 2.0 {"method": "message/send", ...}
+
+4. HTTP Proxy forwards JSON-RPC to backend agent:
+   → Standard HTTP POST to agent URL
+
+5. Backend agent responds with JSON-RPC 2.0 response
+
+6. JSON-RPC Translator converts response:
+   → JSON-RPC 2.0 response → SendMessageResponse protobuf
+
+7. gRPC response returned to client
+```
+
+### Streaming via gRPC
+
+For `StreamMessage` (server-streaming RPC):
+
+```
+gRPC Client                    Sentinel                    Backend Agent
+    │                              │                              │
+    │── StreamMessage request ────▶│                              │
+    │                              │── JSON-RPC message/stream ──▶│
+    │                              │◀── SSE event stream ─────────│
+    │◀── gRPC stream chunk ────────│                              │
+    │◀── gRPC stream chunk ────────│                              │
+    │◀── gRPC stream chunk ────────│                              │
+    │◀── stream complete ──────────│                              │
+    │                              │                              │
+```
+
+Sentinel reads SSE events from the backend and translates each event into a gRPC stream message. The stream is closed when the backend SSE stream ends.
+
+### gRPC Error Mapping
+
+gRPC status codes are mapped to/from JSON-RPC and HTTP error codes:
+
+| gRPC Code | HTTP Status | JSON-RPC Code | Sentinel Error |
+|-----------|-------------|---------------|----------------|
+| `OK` | 200 | — | (success) |
+| `INVALID_ARGUMENT` | 400 | -32600 | ErrInvalidRequest |
+| `UNAUTHENTICATED` | 401 | -32600 | ErrAuthRequired, ErrAuthInvalid |
+| `PERMISSION_DENIED` | 403 | -32001 | ErrForbidden, ErrPolicyViolation |
+| `NOT_FOUND` | 404 | -32601 | ErrNoRoute |
+| `ALREADY_EXISTS` | 409 | -32600 | ErrReplayDetected |
+| `RESOURCE_EXHAUSTED` | 429 | -32600 | ErrRateLimited |
+| `UNAVAILABLE` | 503 | -32603 | ErrAgentUnavailable |
+| `INTERNAL` | 500 | -32603 | Internal errors |
+
+### Configuration
+
+```yaml
+listen:
+  grpc_port: 8443            # gRPC listen port (0 = disabled)
+
+grpc:
+  enabled: true
+  max_message_size: 4194304   # 4MB max message size
+  reflection: true            # Enable gRPC server reflection
+```
+
+---
+
+## Config Hot-Reload
+
+a2a-sentinel supports configuration hot-reload without restarting the process. This enables zero-downtime updates to rate limits, policies, logging, and agent configuration.
+
+### Reload Triggers
+
+1. **SIGHUP signal**: Send `kill -HUP <pid>` to trigger an immediate reload
+2. **File watch**: fsnotify watches `sentinel.yaml` for changes with configurable debounce
+
+### Reload Flow
+
+```
+Trigger (SIGHUP or file change)
+    ↓
+Debounce (default 2s, prevents rapid reloads)
+    ↓
+Load new config from sentinel.yaml
+    ↓
+Validate new config (same validation as startup)
+    ↓ (validation failure → log error, keep old config)
+Diff old config vs new config
+    ↓
+Check for non-reloadable changes
+    ↓ (non-reloadable change → log warning, skip those fields)
+Atomic swap of reloadable fields
+    ↓
+Notify components (rate limiters, policy engine, audit logger)
+    ↓
+Log reload success + Prometheus metric update
+```
+
+### Reloadable vs Non-Reloadable Fields
+
+| Field | Reloadable | Notes |
+|-------|-----------|-------|
+| `security.rate_limit.*` | Yes | Rate limit settings update immediately |
+| `security.policies[]` | Yes | Policy rules swap atomically |
+| `logging.*` | Yes | Audit sampling, log level |
+| `agents[]` | Yes | Add/remove/update agents |
+| `listen.host`, `listen.port` | No | Requires restart (port binding) |
+| `listen.grpc_port` | No | Requires restart (port binding) |
+| `security.auth.mode` | No | Requires restart (pipeline rebuild) |
+| `listen.tls.*` | No | Requires restart (TLS setup) |
+
+### Configuration
+
+```yaml
+reload:
+  enabled: true              # Enable hot-reload
+  watch: true                # Enable fsnotify file watching
+  debounce: 2s               # Debounce interval for file changes
+```
+
+### Manual Reload
+
+```bash
+# Via signal
+kill -HUP $(pidof sentinel)
+
+# Via MCP tool
+MCP tool: reload_config
+```
+
+### Prometheus Metrics
+
+- `sentinel_config_reload_total{status}` — Count of reload attempts (success/failure)
+- `sentinel_config_last_reload_timestamp` — Unix timestamp of last successful reload
+
+---
+
 ## Metrics Endpoint
 
-a2a-sentinel exposes a Prometheus-compatible metrics endpoint at `/metrics` with zero external dependencies. The metrics are generated from internal counters in the audit subsystem.
+a2a-sentinel exposes a Prometheus-compatible metrics endpoint at `/metrics` using the `prometheus/client_golang` library. Metrics are organized into 15+ metric families covering requests, security, gRPC, upstream latency, and operational state.
 
 **Endpoint**: `GET /metrics`
 
-**Exposed metrics**:
-- `sentinel_requests_total{agent, status}` — Total requests by agent and status (allow/block)
-- `sentinel_request_duration_seconds{agent}` — Request latency histogram
-- `sentinel_active_streams{agent}` — Current active SSE streams per agent
+**Request metrics**:
+- `sentinel_requests_total{agent, status, method}` — Total requests by agent, status (allow/block), and A2A method
+- `sentinel_request_duration_seconds{agent}` — Request latency histogram (configurable buckets)
+- `sentinel_active_streams{agent}` — Current active SSE streams per agent (gauge)
+
+**Security metrics**:
 - `sentinel_rate_limit_hits_total{layer}` — Rate limit rejections by layer (ip/user/global)
-- `sentinel_agent_health{agent}` — Agent health status (1 = healthy, 0 = unhealthy)
+- `sentinel_security_blocks_total{reason}` — Security blocks by reason (auth, rate_limit, policy, ssrf, replay)
+- `sentinel_agent_health{agent}` — Agent health status gauge (1 = healthy, 0 = unhealthy)
 - `sentinel_card_changes_total{agent, policy}` — Agent Card changes detected
 
+**gRPC metrics**:
+- `sentinel_grpc_requests_total{method, code}` — gRPC requests by method and status code
+- `sentinel_grpc_request_duration_seconds{method}` — gRPC request latency histogram
+
+**Upstream metrics**:
+- `sentinel_upstream_request_duration_seconds{agent}` — Backend agent response latency histogram
+
+**Operational metrics**:
+- `sentinel_config_reload_total{status}` — Config reload attempts (success/failure)
+- `sentinel_config_last_reload_timestamp` — Unix timestamp of last successful reload
+- `sentinel_build_info{version, go_version, commit}` — Build information gauge
+
 **Design**:
-- No external dependencies (no Prometheus client library)
-- Metrics are collected in-memory via atomic counters
-- `/metrics` handler formats output in Prometheus exposition format
+- Uses `prometheus/client_golang` for proper histogram bucketing and thread-safe collection
+- Default histogram buckets: 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s
 - Compatible with Prometheus, Grafana, Datadog agent, and other scrapers
+- Example Grafana dashboard included at `examples/grafana/sentinel-dashboard.json`
 
 **Configuration**:
 ```yaml
@@ -1091,17 +1327,20 @@ shutdown:
 
 a2a-sentinel implements a layered security architecture:
 
-1. **Protocol Detection** — Identifies JSON-RPC, REST, SSE
+1. **Protocol Detection** — Identifies JSON-RPC, REST, SSE, gRPC
 2. **Two-Layer Security** — IP rate limit (pre-auth) + auth + user rate limit (post-auth)
-3. **Advanced Security** — JWS card verification, replay detection, SSRF protection
-4. **Routing** — Path-prefix or single-agent modes
-5. **Proxying** — HTTP and SSE with manual header control
-6. **Agent Card Management** — Polling, caching, health tracking, aggregation, approve mode
-7. **Audit Logging** — OTel-compatible structured logs
-8. **Metrics** — Prometheus-compatible /metrics endpoint
-9. **MCP Server** — 13 tools (read + write + card approval), 4 resources
-10. **Migration** — `sentinel migrate` for agentgateway conversion
-11. **Graceful Shutdown** — Stream draining with configurable timeout
+3. **Policy Engine** — ABAC rules with IP, user, agent, method, time, header conditions
+4. **Advanced Security** — JWS card verification, replay detection, SSRF protection
+5. **Routing** — Path-prefix or single-agent modes
+6. **Proxying** — HTTP, SSE, and gRPC with manual header control
+7. **gRPC Binding** — Separate gRPC port with JSON-RPC protocol translation
+8. **Agent Card Management** — Polling, caching, health tracking, aggregation, approve mode
+9. **Audit Logging** — OTel-compatible structured logs
+10. **Metrics** — Extended Prometheus metrics with histograms (15+ families)
+11. **Config Hot-Reload** — SIGHUP + fsnotify with debounce and atomic swap
+12. **MCP Server** — 15 tools (read + write + card approval + policy), 4 resources
+13. **Migration** — `sentinel migrate` for agentgateway conversion
+14. **Graceful Shutdown** — Stream draining with configurable timeout
 
 The design prioritizes **zero agent dependency** (transparent to backends), **security by default** (all protections enabled), and **educational errors** (every block includes guidance).
 

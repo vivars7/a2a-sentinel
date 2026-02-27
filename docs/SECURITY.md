@@ -12,14 +12,15 @@ Every security feature is enabled out of the box. Disabling any protection requi
 2. [Threat Model & Defenses](#threat-model--defenses)
 3. [Authentication Modes](#authentication-modes)
 4. [Rate Limiting (2-Layer)](#rate-limiting-2-layer)
-5. [Agent Card Security](#agent-card-security)
-6. [Audit Logging](#audit-logging)
-7. [Push Notification Protection](#push-notification-protection)
-8. [Replay Attack Prevention](#replay-attack-prevention)
-9. [Trusted Proxies](#trusted-proxies)
-10. [Error Messages & Hints](#error-messages--hints)
-11. [Configuration Reference](#configuration-reference)
-12. [Reporting Vulnerabilities](#reporting-vulnerabilities)
+5. [Policy Engine (ABAC)](#policy-engine-abac)
+6. [Agent Card Security](#agent-card-security)
+7. [Audit Logging](#audit-logging)
+8. [Push Notification Protection](#push-notification-protection)
+9. [Replay Attack Prevention](#replay-attack-prevention)
+10. [Trusted Proxies](#trusted-proxies)
+11. [Error Messages & Hints](#error-messages--hints)
+12. [Configuration Reference](#configuration-reference)
+13. [Reporting Vulnerabilities](#reporting-vulnerabilities)
 
 ---
 
@@ -58,6 +59,8 @@ This table maps real-world threats against a2a-sentinel defenses:
 | 8 | **Man-in-middle** | Unencrypted communication with agents | TLS enforcement by default | `agents[].allow_insecure: false` |
 | 9 | **Resource exhaustion** | Too many concurrent SSE streams per agent | Per-agent stream limit | `agents[].max_streams` |
 | 10 | **Connection exhaustion** | Too many total gateway connections | Global connection limit | `listen.max_connections` |
+| 11 | **Unauthorized agent access** | User accesses restricted agents or methods | ABAC policy engine with attribute-based rules | `security.policies[]` |
+| 12 | **Off-hours exploitation** | Attacks during unmonitored periods | Time-based policy restrictions | `security.policies[].conditions.time` |
 
 ---
 
@@ -341,6 +344,304 @@ Both IP and user limits return 429 (Too Many Requests):
 
 ---
 
+## Policy Engine (ABAC)
+
+a2a-sentinel includes an attribute-based access control (ABAC) policy engine that evaluates rules after authentication. Policies provide fine-grained control over who can access which agents, methods, and resources, and when.
+
+### How It Works
+
+The PolicyGuard middleware sits in the security pipeline after authentication and user rate limiting. For each request, it:
+
+1. Collects request attributes (source IP, authenticated user, target agent, A2A method, current time, HTTP headers)
+2. Evaluates all matching policy rules in priority order (lowest number = highest priority)
+3. First matching rule determines the outcome (allow or deny)
+4. If no rule matches, the request is allowed (default-allow)
+
+### Policy Structure
+
+Each policy rule has:
+- **name**: Human-readable identifier
+- **priority**: Evaluation order (lower = evaluated first)
+- **effect**: `allow` or `deny`
+- **conditions**: Attribute matchers (all conditions in a rule must match for the rule to apply)
+
+### Examples
+
+#### IP-Based Blocking
+
+Block requests from specific IP ranges. Supports CIDR notation and negation.
+
+```yaml
+security:
+  policies:
+    # Block all traffic from a known-bad network
+    - name: block-bad-network
+      priority: 10
+      effect: deny
+      conditions:
+        source_ip:
+          cidr: ["203.0.113.0/24", "198.51.100.0/24"]
+
+    # Allow only corporate network, deny everything else
+    - name: allow-corporate-only
+      priority: 20
+      effect: deny
+      conditions:
+        source_ip:
+          not_cidr: ["10.0.0.0/8", "172.16.0.0/12"]
+```
+
+**CIDR negation**: Use `not_cidr` to match requests that are NOT from the specified ranges. This is useful for "allow only these networks" patterns.
+
+---
+
+#### Time-Based Restrictions
+
+Restrict access to specific time windows. Useful for business-hours-only policies or maintenance windows.
+
+```yaml
+security:
+  policies:
+    # Deny access outside business hours (Eastern Time)
+    - name: business-hours-only
+      priority: 20
+      effect: deny
+      conditions:
+        time:
+          outside: "09:00-17:00"
+          timezone: "America/New_York"
+
+    # Deny access during maintenance window (UTC)
+    - name: maintenance-window
+      priority: 5
+      effect: deny
+      conditions:
+        time:
+          within: "02:00-04:00"
+          timezone: "UTC"
+          days: ["Saturday"]
+```
+
+**Time conditions**:
+- `within`: Match requests during this time range
+- `outside`: Match requests outside this time range
+- `timezone`: IANA timezone (default "UTC")
+- `days`: Optional day-of-week filter (Monday, Tuesday, etc.)
+
+---
+
+#### Agent-Specific Access Control
+
+Restrict which users or IPs can access specific agents.
+
+```yaml
+security:
+  policies:
+    # Only admins can access the internal-agent
+    - name: restrict-internal-agent
+      priority: 30
+      effect: deny
+      conditions:
+        agent: ["internal-agent"]
+        user_not: ["admin@example.com", "ops@example.com"]
+
+    # Block external IPs from accessing sensitive agent
+    - name: sensitive-agent-internal-only
+      priority: 25
+      effect: deny
+      conditions:
+        agent: ["sensitive-agent"]
+        source_ip:
+          not_cidr: ["10.0.0.0/8"]
+```
+
+---
+
+#### User-Based Rules
+
+Control access based on authenticated user identity.
+
+```yaml
+security:
+  policies:
+    # Block a specific user
+    - name: block-suspended-user
+      priority: 10
+      effect: deny
+      conditions:
+        user: ["suspended-user@example.com"]
+
+    # Allow only specific users to use expensive methods
+    - name: restrict-expensive-methods
+      priority: 30
+      effect: deny
+      conditions:
+        method: ["tasks/pushNotification/set"]
+        user_not: ["premium-user@example.com", "admin@example.com"]
+```
+
+---
+
+#### Method-Based Rules
+
+Restrict specific A2A methods.
+
+```yaml
+security:
+  policies:
+    # Disable push notifications entirely
+    - name: disable-push
+      priority: 15
+      effect: deny
+      conditions:
+        method: ["tasks/pushNotification/set", "tasks/pushNotification/get"]
+
+    # Read-only mode: only allow message/send, block task management
+    - name: read-only-mode
+      priority: 20
+      effect: deny
+      conditions:
+        method: ["tasks/cancel", "tasks/delete"]
+```
+
+---
+
+#### Header-Based Rules
+
+Match requests based on HTTP header values.
+
+```yaml
+security:
+  policies:
+    # Block requests without a specific custom header
+    - name: require-team-header
+      priority: 25
+      effect: deny
+      conditions:
+        header_missing: ["X-Team-ID"]
+
+    # Block requests from a specific client version
+    - name: block-old-client
+      priority: 20
+      effect: deny
+      conditions:
+        header:
+          User-Agent: ["OldClient/1.0*"]
+```
+
+---
+
+### Policy Evaluation Order
+
+Rules are evaluated in priority order (lowest number first). The first matching rule determines the outcome:
+
+```
+Request arrives after authentication
+    ↓
+Sort policies by priority (ascending)
+    ↓
+For each policy:
+    ↓
+    Check all conditions against request attributes
+    ↓
+    All conditions match?
+        YES → Apply effect (allow/deny), STOP evaluation
+        NO  → Continue to next policy
+    ↓
+No policy matched → DEFAULT ALLOW
+```
+
+**Example evaluation**:
+```yaml
+policies:
+  - name: allow-admin          # priority: 10
+    priority: 10
+    effect: allow
+    conditions:
+      user: ["admin@example.com"]
+
+  - name: block-bad-ip         # priority: 20
+    priority: 20
+    effect: deny
+    conditions:
+      source_ip:
+        cidr: ["203.0.113.0/24"]
+
+  - name: business-hours       # priority: 30
+    priority: 30
+    effect: deny
+    conditions:
+      time:
+        outside: "09:00-17:00"
+```
+
+For a request from `admin@example.com` at 2 AM from IP `203.0.113.50`:
+1. Check `allow-admin` (priority 10): user matches → **ALLOW** (stops here)
+
+For a request from `user@example.com` at 2 AM from IP `203.0.113.50`:
+1. Check `allow-admin` (priority 10): user does not match → skip
+2. Check `block-bad-ip` (priority 20): IP matches CIDR → **DENY** (stops here)
+
+---
+
+### Policy Error Response
+
+When a request is denied by a policy rule:
+
+```json
+{
+  "error": {
+    "code": 403,
+    "message": "Request denied by policy",
+    "hint": "Policy 'business-hours-only' denied this request. Contact admin for access",
+    "docs_url": "https://a2a-sentinel.dev/docs/policies"
+  }
+}
+```
+
+The hint includes the policy name to help administrators identify which rule triggered the block.
+
+---
+
+### Hot-Reload of Policies
+
+Policy rules are hot-reloadable. When the configuration is reloaded (via SIGHUP or file watch), policy rules are atomically swapped without dropping any in-flight requests.
+
+```bash
+# Edit sentinel.yaml to update policies, then:
+kill -HUP $(pidof sentinel)
+
+# Or use MCP tool:
+MCP tool: reload_config
+```
+
+Changes take effect immediately. No restart required.
+
+---
+
+### MCP Tools for Policies
+
+Two MCP tools are available for policy management:
+
+**list_policies** — List all configured policies with their priority, effect, and conditions:
+```
+MCP tool: list_policies
+```
+
+**evaluate_policy** — Test policies against a simulated request context:
+```
+MCP tool: evaluate_policy {
+  "source_ip": "203.0.113.50",
+  "user": "test@example.com",
+  "agent": "echo",
+  "method": "message/send"
+}
+```
+
+Returns which policy would match and whether the request would be allowed or denied.
+
+---
+
 ## Agent Card Security
 
 Agent Cards describe the agent's capabilities, security schemes, and methods. a2a-sentinel periodically fetches and caches them, with multiple safeguards:
@@ -601,6 +902,7 @@ All requests are logged in OpenTelemetry-compatible structured JSON format. Enab
 | `forbidden` | Authenticated but lacks permission | 403 |
 | `ssrf_blocked` | Push notification URL blocked | 403 |
 | `replay_detected` | Nonce/timestamp validation failed | 409 |
+| `policy_violation` | ABAC policy rule denied the request | 403 |
 
 ### Sampling
 
@@ -923,6 +1225,28 @@ security:
     require: false          # Set true to require JWS-signed Agent Cards
     trusted_jwks_urls: []   # URLs to trusted agent JWKS endpoints
     cache_ttl: 1h           # Cache JWKS keys for this long
+
+  # ── Policy Engine (ABAC) ──
+  policies:
+    - name: example-policy          # Human-readable name
+      priority: 10                  # Evaluation order (lower = first)
+      effect: deny                  # allow | deny
+      conditions:
+        source_ip:                  # IP-based conditions
+          cidr: []                  # Match these CIDRs
+          not_cidr: []              # Match if NOT in these CIDRs
+        user: []                    # Match these users
+        user_not: []                # Match if user NOT in this list
+        agent: []                   # Match these agent names
+        method: []                  # Match these A2A methods
+        header:                     # Match header values (glob patterns)
+          X-Custom: ["value*"]
+        header_missing: []          # Match if these headers are absent
+        time:
+          within: ""                # Time range "HH:MM-HH:MM"
+          outside: ""               # Outside time range
+          timezone: "UTC"           # IANA timezone
+          days: []                  # Day-of-week filter
 
   # ── Push Notification Protection ──
   push:
