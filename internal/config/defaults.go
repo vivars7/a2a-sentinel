@@ -103,6 +103,9 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Migration.AgentgatewayVersion = "latest"
 	}
 
+	// ── Reload ──
+	applyReloadDefaults(&cfg.Reload)
+
 	// ── Per-Agent defaults ──
 	for i := range cfg.Agents {
 		applyAgentDefaults(&cfg.Agents[i])
@@ -191,6 +194,21 @@ func applyAuditDefaults(a *AuditConfig) {
 	}
 	if a.MaxBodyLogSize == 0 {
 		a.MaxBodyLogSize = 1024
+	}
+}
+
+// defaultReloadDebounce is the default debounce interval for config file watching.
+const defaultReloadDebounce = 2 * time.Second
+
+func applyReloadDefaults(r *ReloadConfig) {
+	// enabled defaults to true. Since Go bool zero-value is false and our default is true,
+	// we apply it when the entire reload block appears unconfigured (all zero values).
+	if !r.Enabled && !r.WatchFile && r.Debounce.Duration == 0 {
+		r.Enabled = true
+		r.WatchFile = true
+	}
+	if r.Debounce.Duration == 0 {
+		r.Debounce.Duration = defaultReloadDebounce
 	}
 }
 

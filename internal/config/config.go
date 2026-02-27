@@ -24,6 +24,7 @@ type Config struct {
 	Logging        LoggingConfig        `yaml:"logging"`
 	Shutdown       ShutdownConfig       `yaml:"shutdown"`
 	Migration      MigrationConfig      `yaml:"migration"`
+	Reload         ReloadConfig         `yaml:"reload"`
 }
 
 // ListenConfig defines the listener address and connection limits.
@@ -202,6 +203,13 @@ type ShutdownConfig struct {
 // MigrationConfig holds the target agentgateway version for migration.
 type MigrationConfig struct {
 	AgentgatewayVersion string `yaml:"agentgateway_version"`
+}
+
+// ReloadConfig controls config hot-reload behavior (SIGHUP and file watching).
+type ReloadConfig struct {
+	Enabled   bool     `yaml:"enabled"`    // default true
+	WatchFile bool     `yaml:"watch_file"` // default true
+	Debounce  Duration `yaml:"debounce"`   // default 2s
 }
 
 // Duration is a time.Duration that supports YAML string parsing (e.g., "60s", "5m").
