@@ -1015,6 +1015,7 @@ security:
 2. Check hostname against `allowed_domains` — if match, allow immediately
 3. Resolve hostname to IP address
 4. If IP in private range → reject with `ErrSSRFBlocked`
+   - DNS lookup failure: controlled by `dns_fail_policy` (default: `block` = fail-closed)
 5. If `require_https: true` and scheme is not HTTPS → reject
 6. Otherwise → allow
 
@@ -1048,11 +1049,13 @@ Replay attacks: attacker records a valid request and resends it later to trigger
 security:
   replay:
     enabled: true
-    window: 300s            # Accept requests ≤5 minutes old
-    nonce_policy: warn      # warn | require
-    store: memory           # memory | redis
-    redis_url: ""           # If store: redis
-    cleanup_interval: 60s   # Cleanup expired nonces every 60s
+    window: 300s              # Accept requests ≤5 minutes old
+    nonce_policy: warn        # warn | require
+    nonce_source: auto        # auto | header | jsonrpc-id
+    clock_skew: 5s            # Timestamp clock skew tolerance
+    store: memory             # memory | redis
+    redis_url: ""             # If store: redis
+    cleanup_interval: 60s     # Cleanup expired nonces every 60s
 ```
 
 **Nonce policies**:
@@ -1062,15 +1065,33 @@ security:
 | `warn` | Log warning if nonce already seen, but still allow the request | Early warning, gradual rollout |
 | `require` | Reject the request if nonce already seen | Strict protection for production |
 
-**How it works**:
-1. Client includes a unique nonce in the `X-Request-ID` header and a Unix timestamp in the `X-Request-Time` header
-2. Sentinel extracts the timestamp and checks that it falls within the configured `window` (default 5 minutes)
-3. Sentinel checks the nonce against the in-memory nonce store (or Redis, if configured)
-4. If the nonce has been seen before:
-   - `warn` policy: log warning, allow the request
-   - `require` policy: reject with 409 (Conflict)
-5. If the nonce is new: record it in the store with the current timestamp
-6. A background goroutine periodically cleans up expired nonces based on `cleanup_interval`
+**Nonce sources** (`nonce_source`):
+
+| Source | Behavior |
+|--------|----------|
+| `auto` (default) | Check `X-Sentinel-Nonce` header first, fall back to JSON-RPC `id` field |
+| `header` | Only use `X-Sentinel-Nonce` header (ignore body) |
+| `jsonrpc-id` | Only use JSON-RPC `id` field from request body |
+
+**Timestamp validation**:
+
+When the `X-Sentinel-Timestamp` header is present, sentinel validates that the request is within the replay window:
+
+- Accepts **RFC3339** format (e.g., `2026-02-27T12:00:00Z`) or **Unix epoch** (10-digit, e.g., `1740657600`)
+- Rejects if `|now - timestamp| > window + clock_skew`
+- Without the header, `time.Now()` is used (no timestamp validation)
+
+**Flow**:
+
+1. Client includes a unique nonce in the `X-Sentinel-Nonce` header and optionally a timestamp in the `X-Sentinel-Timestamp` header
+2. Sentinel extracts nonce based on `nonce_source` configuration
+3. If `X-Sentinel-Timestamp` header is present, validates timestamp freshness
+4. Checks the nonce against the in-memory nonce store
+5. If the nonce has been seen before:
+   - `warn`: Log warning, forward request anyway (never blocks)
+   - `require`: Reject with 429 error
+6. If the nonce is new: record it in the store with expiry timestamp
+7. A background goroutine periodically cleans up expired nonces based on `cleanup_interval`
 
 **Memory management**: The in-memory nonce store uses a map with periodic cleanup. Entries older than `window` are purged every `cleanup_interval` to prevent unbounded memory growth.
 
@@ -1090,24 +1111,24 @@ security:
 
 **Client adds to request headers**:
 ```
-X-Request-ID: abc123def456xyz789  # Unique nonce (UUID recommended)
-X-Request-Time: 1708999200       # Unix timestamp (seconds)
+X-Sentinel-Nonce: abc123def456xyz789     # Unique nonce (UUID recommended)
+X-Sentinel-Timestamp: 2026-02-27T12:00:00Z  # Optional: request timestamp (RFC3339)
 ```
 
 **Gateway validation**:
 1. Extract timestamp → check within window (reject if too old)
-2. Extract nonce → check against nonce store
-3. If valid and new → record nonce, forward request
-4. If duplicate nonce → warn or reject based on `nonce_policy`
-5. If expired timestamp → reject with 409
+2. Extract nonce (header > JSON-RPC id based on nonce_source)
+3. If X-Sentinel-Timestamp present → validate timestamp freshness
+4. If valid and new → record nonce, forward request
+5. If duplicate nonce → warn or reject based on `nonce_policy`
 
 **Example client code**:
 ```bash
 NONCE=$(uuidgen)
-TIMESTAMP=$(date -u +%s)
+TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 curl -X POST http://localhost:8080/agents/echo/ \
-  -H "X-Request-ID: $NONCE" \
-  -H "X-Request-Time: $TIMESTAMP" \
+  -H "X-Sentinel-Nonce: $NONCE" \
+  -H "X-Sentinel-Timestamp: $TIMESTAMP" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": "1", "method": "message/send", ...}'
 ```
@@ -1253,6 +1274,7 @@ security:
     block_private_networks: true    # Block private network push URLs (SSRF defense)
     allowed_domains: []             # Domains allowed even if resolving to private IPs
     require_https: true             # Require HTTPS for push notification URLs
+    dns_fail_policy: block          # block (fail-closed) | allow (fail-open) on DNS failures
     require_challenge: false        # Require challenge verification
     hmac_secret: ""                 # Sign outbound webhooks with HMAC-SHA256
 
@@ -1261,6 +1283,8 @@ security:
     enabled: true           # Enable nonce + timestamp replay detection
     window: 5m              # Accept requests within this time window
     nonce_policy: warn      # warn (log only) | require (reject duplicates)
+    nonce_source: auto      # auto (header > id) | header | jsonrpc-id
+    clock_skew: 5s          # Timestamp clock skew tolerance
     store: memory           # memory | redis
     redis_url: ""           # Redis URL if store: redis
     cleanup_interval: 60s   # Cleanup expired nonces at this interval

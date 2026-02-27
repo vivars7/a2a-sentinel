@@ -330,8 +330,8 @@ See `sentinel.yaml.example` for all available options including:
 - **agents**: Health checks, polling intervals, timeouts, max concurrent streams
 - **security.auth**: JWT issuer/audience/jwks_url, API key validation, passthrough modes
 - **security.rate_limit**: IP limits, user limits, per-agent limits, cleanup intervals
-- **security.replay**: Nonce tracking (memory or Redis), configurable window
-- **security.push**: SSRF defense (block private networks), allowed domains, HMAC signing
+- **security.replay**: Nonce tracking (memory or Redis), configurable window, nonce_source, clock_skew
+- **security.push**: SSRF defense (block private networks), allowed domains, HMAC signing, dns_fail_policy
 - **security.policies**: ABAC rules with IP, user, agent, method, time, header conditions
 - **body_inspection**: Max body size, skip for streaming requests
 - **card**: Aggregation mode, JWK file for signing
@@ -607,6 +607,9 @@ See [docs/MIGRATION.md](docs/MIGRATION.md) for the full migration guide.
 - Helm chart for Kubernetes deployment
 - ABAC policy engine (IP, user, agent, method, time-based, header rules)
 - Policy evaluation MCP tools
+- Replay detection: nonce_source priority + timestamp validation with clock_skew (v0.3.1)
+- SSRF checker: configurable dns_fail_policy for DNS failures (v0.3.1)
+- Consistent HTTP 502 handling across all error mapping systems (v0.3.1)
 
 **v1.0 (Planned)**
 - OPA policy integration
