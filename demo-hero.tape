@@ -9,7 +9,7 @@ Set FontSize 16
 Set Padding 20
 Set TypingSpeed 40ms
 Set PlaybackSpeed 1.2
-Set Shell "zsh"
+Set Shell "bash"
 
 # Title
 Type "# a2a-sentinel: Secure A2A Gateway in 30 seconds"

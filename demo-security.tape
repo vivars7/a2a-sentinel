@@ -9,7 +9,7 @@ Set FontSize 15
 Set Padding 20
 Set TypingSpeed 35ms
 Set PlaybackSpeed 1.0
-Set Shell "zsh"
+Set Shell "bash"
 
 Type "# a2a-sentinel Security Features"
 Enter
