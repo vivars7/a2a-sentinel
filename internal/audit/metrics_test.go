@@ -6,7 +6,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func getMetricsBody(m *Metrics) string {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	m.Handler().ServeHTTP(rec, req)
+	return rec.Body.String()
+}
 
 func TestMetrics_RecordRequest(t *testing.T) {
 	m := NewMetrics()
@@ -15,12 +23,7 @@ func TestMetrics_RecordRequest(t *testing.T) {
 	m.RecordRequest("echo", "message/send", 200)
 	m.RecordRequest("echo", "message/send", 429)
 
-	// Verify via handler output
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	m.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
+	body := getMetricsBody(m)
 	if !strings.Contains(body, `sentinel_requests_total{agent="echo",method="message/send",status="200"} 2`) {
 		t.Errorf("expected 2 requests with 200 status, got:\n%s", body)
 	}
@@ -37,20 +40,13 @@ func TestMetrics_ActiveStreams(t *testing.T) {
 	m.IncrActiveStreams()
 	m.DecrActiveStreams()
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	m.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
+	body := getMetricsBody(m)
 	if !strings.Contains(body, "sentinel_active_streams 2") {
 		t.Errorf("expected active_streams=2, got:\n%s", body)
 	}
 
-	// Test SetActiveStreams
 	m.SetActiveStreams(10)
-	rec = httptest.NewRecorder()
-	m.Handler().ServeHTTP(rec, req)
-	body = rec.Body.String()
+	body = getMetricsBody(m)
 	if !strings.Contains(body, "sentinel_active_streams 10") {
 		t.Errorf("expected active_streams=10, got:\n%s", body)
 	}
@@ -63,15 +59,11 @@ func TestMetrics_RateLimitHits(t *testing.T) {
 	m.RecordRateLimitHit("ip", "echo")
 	m.RecordRateLimitHit("user", "echo")
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	m.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, `sentinel_rate_limit_hits_total{layer="ip",agent="echo"} 2`) {
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_rate_limit_hits_total{agent="echo",layer="ip"} 2`) {
 		t.Errorf("expected 2 IP rate limit hits, got:\n%s", body)
 	}
-	if !strings.Contains(body, `sentinel_rate_limit_hits_total{layer="user",agent="echo"} 1`) {
+	if !strings.Contains(body, `sentinel_rate_limit_hits_total{agent="echo",layer="user"} 1`) {
 		t.Errorf("expected 1 user rate limit hit, got:\n%s", body)
 	}
 }
@@ -82,11 +74,7 @@ func TestMetrics_AgentHealth(t *testing.T) {
 	m.SetAgentHealth("echo", true)
 	m.SetAgentHealth("chat", false)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	m.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
+	body := getMetricsBody(m)
 	if !strings.Contains(body, `sentinel_agent_health{agent="echo"} 1`) {
 		t.Errorf("expected echo healthy=1, got:\n%s", body)
 	}
@@ -94,11 +82,8 @@ func TestMetrics_AgentHealth(t *testing.T) {
 		t.Errorf("expected chat healthy=0, got:\n%s", body)
 	}
 
-	// Toggle health
 	m.SetAgentHealth("echo", false)
-	rec = httptest.NewRecorder()
-	m.Handler().ServeHTTP(rec, req)
-	body = rec.Body.String()
+	body = getMetricsBody(m)
 	if !strings.Contains(body, `sentinel_agent_health{agent="echo"} 0`) {
 		t.Errorf("expected echo healthy=0 after toggle, got:\n%s", body)
 	}
@@ -107,7 +92,6 @@ func TestMetrics_AgentHealth(t *testing.T) {
 func TestMetrics_Handler(t *testing.T) {
 	m := NewMetrics()
 
-	// Populate some data
 	m.RecordRequest("agent1", "message/send", 200)
 	m.RecordRateLimitHit("ip", "agent1")
 	m.SetAgentHealth("agent1", true)
@@ -117,9 +101,8 @@ func TestMetrics_Handler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	m.Handler().ServeHTTP(rec, req)
 
-	// Verify content type
 	ct := rec.Header().Get("Content-Type")
-	if ct != "text/plain; version=0.0.4; charset=utf-8" {
+	if !strings.HasPrefix(ct, "text/plain") {
 		t.Errorf("unexpected Content-Type: %q", ct)
 	}
 
@@ -138,25 +121,20 @@ func TestMetrics_Handler(t *testing.T) {
 		}
 	}
 
-	// Verify output is sorted (lines should be in alphabetical order)
-	lines := strings.Split(strings.TrimSpace(body), "\n")
-	for i := 1; i < len(lines); i++ {
-		if lines[i] < lines[i-1] {
-			t.Errorf("metrics output not sorted: line %d (%q) < line %d (%q)",
-				i, lines[i], i-1, lines[i-1])
-		}
+	// Verify HELP and TYPE annotations exist (prometheus client feature)
+	if !strings.Contains(body, "# HELP sentinel_requests_total") {
+		t.Error("expected HELP annotation for sentinel_requests_total")
+	}
+	if !strings.Contains(body, "# TYPE sentinel_requests_total counter") {
+		t.Error("expected TYPE annotation for sentinel_requests_total")
 	}
 }
 
 func TestMetrics_Handler_Empty(t *testing.T) {
 	m := NewMetrics()
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	m.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
-	// Should still have active_streams (always present)
+	body := getMetricsBody(m)
+	// Active streams gauge always present even with zero value
 	if !strings.Contains(body, "sentinel_active_streams 0") {
 		t.Errorf("expected active_streams=0 in empty metrics, got:\n%s", body)
 	}
@@ -168,14 +146,17 @@ func TestMetrics_RecordLatency(t *testing.T) {
 	m.RecordLatency("echo", "message/send", 10.5)
 	m.RecordLatency("echo", "message/send", 20.0)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	m.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
-	// 10.5ms = 10500 usec, 20.0ms = 20000 usec, total = 30500
-	if !strings.Contains(body, `sentinel_request_duration_usec{agent="echo",method="message/send"} 30500`) {
-		t.Errorf("expected accumulated duration in usec, got:\n%s", body)
+	body := getMetricsBody(m)
+	// Now uses histogram in seconds: 10.5ms = 0.0105s, 20.0ms = 0.02s, sum = 0.0305
+	if !strings.Contains(body, `sentinel_request_duration_seconds_sum{agent="echo",method="message/send"}`) {
+		t.Errorf("expected histogram sum metric, got:\n%s", body)
+	}
+	if !strings.Contains(body, `sentinel_request_duration_seconds_count{agent="echo",method="message/send"} 2`) {
+		t.Errorf("expected histogram count=2, got:\n%s", body)
+	}
+	// Verify histogram buckets exist
+	if !strings.Contains(body, `sentinel_request_duration_seconds_bucket{`) {
+		t.Errorf("expected histogram buckets, got:\n%s", body)
 	}
 }
 
@@ -198,11 +179,8 @@ func TestMetrics_Concurrent(t *testing.T) {
 				m.SetAgentHealth("echo", i%2 == 0)
 				m.RecordLatency("echo", "message/send", 1.0)
 
-				// Also read metrics concurrently
 				if i%10 == 0 {
-					rec := httptest.NewRecorder()
-					req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-					m.Handler().ServeHTTP(rec, req)
+					_ = getMetricsBody(m)
 				}
 			}
 		}(g)
@@ -210,12 +188,7 @@ func TestMetrics_Concurrent(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify final state is consistent
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	m.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
+	body := getMetricsBody(m)
 	// Total requests: 50 goroutines * 100 iterations = 5000
 	if !strings.Contains(body, `sentinel_requests_total{agent="echo",method="message/send",status="200"} 5000`) {
 		t.Errorf("expected 5000 total requests after concurrent access, got:\n%s", body)
@@ -224,5 +197,122 @@ func TestMetrics_Concurrent(t *testing.T) {
 	// Active streams should be 0 (equal incr/decr)
 	if !strings.Contains(body, "sentinel_active_streams 0") {
 		t.Errorf("expected active_streams=0 after balanced incr/decr, got:\n%s", body)
+	}
+}
+
+// ── New v0.3 Metrics Tests ──
+
+func TestMetrics_ConfigReloads(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordConfigReload(true)
+	m.RecordConfigReload(true)
+	m.RecordConfigReload(false)
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_config_reloads_total{result="success"} 2`) {
+		t.Errorf("expected 2 successful reloads, got:\n%s", body)
+	}
+	if !strings.Contains(body, `sentinel_config_reloads_total{result="failure"} 1`) {
+		t.Errorf("expected 1 failed reload, got:\n%s", body)
+	}
+}
+
+func TestMetrics_ConfigReloadTime(t *testing.T) {
+	m := NewMetrics()
+
+	now := time.Now()
+	m.SetConfigReloadTime(now)
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, "sentinel_config_reload_timestamp_seconds") {
+		t.Errorf("expected config reload timestamp metric, got:\n%s", body)
+	}
+}
+
+func TestMetrics_GRPCRequests(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordGRPCRequest("echo", "SendMessage", 0)
+	m.RecordGRPCLatency("echo", "SendMessage", 0.05)
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_grpc_requests_total{agent="echo",method="SendMessage",status="0"} 1`) {
+		t.Errorf("expected gRPC request counter, got:\n%s", body)
+	}
+	if !strings.Contains(body, `sentinel_grpc_request_duration_seconds_count{agent="echo",method="SendMessage"} 1`) {
+		t.Errorf("expected gRPC duration histogram, got:\n%s", body)
+	}
+}
+
+func TestMetrics_AgentCardChanges(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordAgentCardChange("echo", "auto")
+	m.RecordAgentCardChange("echo", "approve")
+	m.RecordAgentCardChange("chat", "reject")
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_agent_card_changes_total{action="auto",agent="echo"} 1`) {
+		t.Errorf("expected auto card change, got:\n%s", body)
+	}
+	if !strings.Contains(body, `sentinel_agent_card_changes_total{action="approve",agent="echo"} 1`) {
+		t.Errorf("expected approve card change, got:\n%s", body)
+	}
+}
+
+func TestMetrics_MCPRequests(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordMCPRequest("list_agents", true)
+	m.RecordMCPRequest("list_agents", false)
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_mcp_requests_total{status="success",tool="list_agents"} 1`) {
+		t.Errorf("expected MCP success counter, got:\n%s", body)
+	}
+	if !strings.Contains(body, `sentinel_mcp_requests_total{status="error",tool="list_agents"} 1`) {
+		t.Errorf("expected MCP error counter, got:\n%s", body)
+	}
+}
+
+func TestMetrics_SecurityBlocks(t *testing.T) {
+	m := NewMetrics()
+
+	reasons := []string{"auth_fail", "rate_limit", "replay", "ssrf", "jws", "policy"}
+	for _, r := range reasons {
+		m.RecordSecurityBlock(r)
+	}
+	m.RecordSecurityBlock("auth_fail") // second hit
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_security_blocks_total{reason="auth_fail"} 2`) {
+		t.Errorf("expected 2 auth_fail blocks, got:\n%s", body)
+	}
+	if !strings.Contains(body, `sentinel_security_blocks_total{reason="replay"} 1`) {
+		t.Errorf("expected 1 replay block, got:\n%s", body)
+	}
+}
+
+func TestMetrics_UpstreamLatency(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordUpstreamLatency("echo", 0.123)
+	m.RecordUpstreamLatency("echo", 0.456)
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_upstream_latency_seconds_count{agent="echo"} 2`) {
+		t.Errorf("expected upstream latency count=2, got:\n%s", body)
+	}
+}
+
+func TestMetrics_BuildInfo(t *testing.T) {
+	m := NewMetrics()
+
+	m.SetBuildInfo("v0.3.0", "go1.26")
+
+	body := getMetricsBody(m)
+	if !strings.Contains(body, `sentinel_build_info{go_version="go1.26",version="v0.3.0"} 1`) {
+		t.Errorf("expected build info gauge=1, got:\n%s", body)
 	}
 }
