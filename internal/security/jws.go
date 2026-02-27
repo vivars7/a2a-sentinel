@@ -1,7 +1,6 @@
 package security
 
 import (
-	"log"
 	"net/http"
 )
 
@@ -17,13 +16,10 @@ func NewJWSVerifier() *JWSVerifier {
 	return &JWSVerifier{}
 }
 
-// Process returns an http.Handler that passes all requests through (stub).
+// Process passes all requests through without modification.
 // Agent Card JWS verification is handled by agentcard.JWSVerifier, not this middleware.
 func (j *JWSVerifier) Process(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Println("stub: JWS verification check skipped (card signatures verified during polling)")
-		next.ServeHTTP(w, r)
-	})
+	return next
 }
 
 // Name returns the middleware name.
