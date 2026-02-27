@@ -30,6 +30,7 @@ type Config struct {
 type ListenConfig struct {
 	Host           string    `yaml:"host"`
 	Port           int       `yaml:"port"`
+	GRPCPort       int       `yaml:"grpc_port"`
 	MaxConnections int       `yaml:"max_connections"`
 	GlobalRateLimit int      `yaml:"global_rate_limit"`
 	TrustedProxies []string  `yaml:"trusted_proxies"`
@@ -66,6 +67,7 @@ type HealthConfig struct {
 type AgentConfig struct {
 	Name             string            `yaml:"name"`
 	URL              string            `yaml:"url"`
+	GRPCURL          string            `yaml:"grpc_url"`
 	CardPath         string            `yaml:"card_path"`
 	PollInterval     Duration          `yaml:"poll_interval"`
 	Timeout          Duration          `yaml:"timeout"`
