@@ -18,6 +18,7 @@ import (
 	"github.com/vivars7/a2a-sentinel/internal/config"
 	"github.com/vivars7/a2a-sentinel/internal/ctxkeys"
 	sentinelerrors "github.com/vivars7/a2a-sentinel/internal/errors"
+	sentinelgrpc "github.com/vivars7/a2a-sentinel/internal/grpc"
 	"github.com/vivars7/a2a-sentinel/internal/health"
 	"github.com/vivars7/a2a-sentinel/internal/protocol"
 	"github.com/vivars7/a2a-sentinel/internal/proxy"
@@ -40,6 +41,7 @@ type Server struct {
 	cfg           *config.Config
 	mu            sync.Mutex
 	httpServer    *http.Server
+	grpcServer    *sentinelgrpc.GRPCServer
 	cardManager   cardStarter
 	listener      net.Listener // if non-nil, Start uses this instead of creating one
 	streamMgr     *proxy.StreamManager
@@ -162,7 +164,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 	}
 	healthHandler := health.NewHandler(healthChecker, version, cfg.Health.ReadinessMode, defaultAgent)
 
-	return &Server{
+	srv := &Server{
 		cfg:           cfg,
 		cardManager:   cardManager,
 		streamMgr:     streamMgr,
@@ -174,7 +176,17 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		metrics:       metrics,
 		logger:        logger,
 		version:       version,
-	}, nil
+	}
+
+	// 10. Create gRPC server if grpc_port is configured
+	if cfg.Listen.GRPCPort > 0 {
+		pipelineCfg := srv.buildSecurityPipelineConfig()
+		middlewares := security.BuildPipeline(pipelineCfg)
+		srv.grpcServer = sentinelgrpc.NewGRPCServer(cfg, rtr, httpProxy, sseProxy, middlewares, logger)
+		logger.Info("gRPC server configured", "port", cfg.Listen.GRPCPort)
+	}
+
+	return srv, nil
 }
 
 // Start begins listening and serving. It blocks until the context is canceled
@@ -214,11 +226,23 @@ func (s *Server) Start(ctx context.Context) error {
 	s.httpServer = srv
 	s.mu.Unlock()
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		s.logger.Info("listening", "addr", listenAddr)
 		errCh <- srv.Serve(ln)
 	}()
+
+	// Start gRPC server if configured
+	if s.grpcServer != nil {
+		grpcAddr := fmt.Sprintf("%s:%d", s.cfg.Listen.Host, s.cfg.Listen.GRPCPort)
+		grpcLn, err := net.Listen("tcp", grpcAddr)
+		if err != nil {
+			return fmt.Errorf("listening gRPC on %s: %w", grpcAddr, err)
+		}
+		go func() {
+			errCh <- s.grpcServer.Serve(grpcLn)
+		}()
+	}
 
 	// Wait for context cancellation or server error
 	select {
@@ -260,6 +284,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if err := hs.Shutdown(ctx); err != nil {
 			return fmt.Errorf("http server shutdown: %w", err)
 		}
+	}
+
+	// 2b. Graceful stop gRPC server
+	if s.grpcServer != nil {
+		s.grpcServer.GracefulStop()
 	}
 
 	// 3. Stop card manager

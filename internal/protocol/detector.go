@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"net/http"
+	"strings"
 )
 
 // ProtocolType identifies the A2A protocol binding.
@@ -14,6 +15,8 @@ const (
 	ProtocolREST ProtocolType = "rest"
 	// ProtocolAgentCard indicates an Agent Card request.
 	ProtocolAgentCard ProtocolType = "agentcard"
+	// ProtocolGRPC indicates a gRPC binding.
+	ProtocolGRPC ProtocolType = "grpc"
 	// ProtocolUnknown indicates an unrecognized protocol.
 	ProtocolUnknown ProtocolType = "unknown"
 )
@@ -51,7 +54,16 @@ func Detect(r *http.Request) (DetectResult, error) {
 		}, nil
 	}
 
-	// 3. JSON-RPC: POST with body containing "jsonrpc":"2.0"
+	// 3. gRPC: Content-Type starts with "application/grpc"
+	if ct := r.Header.Get("Content-Type"); strings.HasPrefix(ct, "application/grpc") {
+		return DetectResult{
+			Protocol: ProtocolGRPC,
+			Method:   "", // gRPC method is determined by the gRPC server
+			Binding:  "grpc",
+		}, nil
+	}
+
+	// 4. JSON-RPC: POST with body containing "jsonrpc":"2.0"
 	if r.Method == http.MethodPost {
 		body, err := InspectAndRewind(r, maxBodyInspectSize)
 		if err != nil {
@@ -70,7 +82,7 @@ func Detect(r *http.Request) (DetectResult, error) {
 		}
 	}
 
-	// 4. REST patterns (POST/GET/DELETE with specific URL patterns)
+	// 5. REST patterns (POST/GET/DELETE with specific URL patterns)
 	restMethod := MatchRESTPattern(r.Method, r.URL.Path)
 	if restMethod != "" {
 		return DetectResult{
@@ -80,7 +92,7 @@ func Detect(r *http.Request) (DetectResult, error) {
 		}, nil
 	}
 
-	// 5. Unknown
+	// 6. Unknown
 	return DetectResult{
 		Protocol: ProtocolUnknown,
 		Method:   "",

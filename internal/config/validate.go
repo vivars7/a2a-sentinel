@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -33,6 +34,11 @@ func Validate(cfg *Config) error {
 		if a.Timeout.Duration < 0 {
 			errs = append(errs, fmt.Sprintf("agents[%d]: timeout must be positive", i))
 		}
+		if a.GRPCURL != "" {
+			if u, err := url.Parse(a.GRPCURL); err != nil || u.Host == "" {
+				errs = append(errs, fmt.Sprintf("agents[%d]: grpc_url must be a valid URL (got %q)", i, a.GRPCURL))
+			}
+		}
 		if !isValidCardChangePolicy(a.CardChangePolicy) {
 			errs = append(errs, fmt.Sprintf("agents[%d]: card_change_policy must be one of: auto, alert, approve (got %q)", i, a.CardChangePolicy))
 		}
@@ -47,6 +53,12 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.MCP.Port < 1 || cfg.MCP.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("mcp.port must be 1-65535 (got %d)", cfg.MCP.Port))
+	}
+	if cfg.Listen.GRPCPort != 0 && (cfg.Listen.GRPCPort < 1 || cfg.Listen.GRPCPort > 65535) {
+		errs = append(errs, fmt.Sprintf("listen.grpc_port must be 0 (disabled) or 1-65535 (got %d)", cfg.Listen.GRPCPort))
+	}
+	if cfg.Listen.GRPCPort != 0 && cfg.Listen.GRPCPort == cfg.Listen.Port {
+		errs = append(errs, fmt.Sprintf("listen.grpc_port must differ from listen.port (both %d)", cfg.Listen.GRPCPort))
 	}
 
 	// ── Connection limits ──
