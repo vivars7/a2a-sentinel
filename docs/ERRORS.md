@@ -404,15 +404,15 @@ See [Rate Limiting Configuration](../docs/SECURITY.md#rate-limiting) for advance
    ```bash
    NONCE=$(uuidgen)
    curl -X POST http://localhost:8080/agents/myagent/ \
-     -H "X-Request-Nonce: $NONCE" \
+     -H "X-Sentinel-Nonce: $NONCE" \
      -H "Content-Type: application/json" \
      -d '{"jsonrpc": "2.0", "id": "1", ...}'
    ```
 2. **Include timestamp**: Add current timestamp to the request
    ```bash
-   TIMESTAMP=$(date -u +%s)
+   TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
    curl -X POST http://localhost:8080/agents/myagent/ \
-     -H "X-Request-Timestamp: $TIMESTAMP" \
+     -H "X-Sentinel-Timestamp: $TIMESTAMP" \
      ...
    ```
 3. **Verify nonce uniqueness**: Never reuse the same nonce

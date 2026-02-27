@@ -343,14 +343,17 @@ Request Flow:
 - **ReplayDetector** — Nonce + timestamp replay prevention
   - Tracks request nonces in memory (or Redis)
   - Configurable policies: `warn` (log only) or `require` (reject duplicates)
+  - Nonce source priority: `X-Sentinel-Nonce` header > JSON-RPC `id` (configurable via `nonce_source`)
+  - Timestamp validation via `X-Sentinel-Timestamp` header (RFC3339 + Unix epoch) with `clock_skew` tolerance
   - Background cleanup of expired nonces
-  - Configurable: `security.replay.window`, `security.replay.nonce_policy`
+  - Configurable: `security.replay.window`, `security.replay.nonce_policy`, `security.replay.nonce_source`, `security.replay.clock_skew`
 
 - **SSRFChecker** — Push notification SSRF protection
   - Blocks push notification URLs resolving to private networks
   - Validates against domain allowlist
   - Enforces HTTPS requirement
-  - Configurable: `security.push.block_private_networks`, `security.push.allowed_domains`
+  - Configurable DNS failure policy: `block` (fail-closed) or `allow` (fail-open)
+  - Configurable: `security.push.block_private_networks`, `security.push.allowed_domains`, `security.push.dns_fail_policy`
 
 - **PolicyGuard** — ABAC policy engine middleware
   - Evaluates attribute-based access control rules after authentication
