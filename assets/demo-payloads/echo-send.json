@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "role": "user",
+      "parts": [{"text": "Hello from sentinel"}]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# docker-compose-security-demo.yaml — Override for security/MCP demo recording
+# Usage: docker compose -f docker-compose.yaml -f docker-compose-security-demo.yaml up -d
+services:
+  sentinel:
+    volumes:
+      - ./sentinel-security-demo.yaml:/etc/sentinel/sentinel.yaml
