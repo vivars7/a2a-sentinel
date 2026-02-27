@@ -96,17 +96,21 @@ type ReplayDetectorConfig struct {
 	Enabled         bool
 	Window          time.Duration
 	NoncePolicy     string // "warn" or "require"
+	NonceSource     string // "auto", "header", "jsonrpc-id"
+	ClockSkew       time.Duration
 	CleanupInterval time.Duration
 }
 
 // ReplayDetector is a middleware that detects replayed JSON-RPC requests
 // by tracking the id field as a nonce within a configurable time window.
 type ReplayDetector struct {
-	store   NonceStore
-	policy  string // "warn" or "require"
-	window  time.Duration
-	enabled bool
-	logger  *slog.Logger
+	store       NonceStore
+	policy      string // "warn" or "require"
+	nonceSource string // "auto", "header", "jsonrpc-id"
+	window      time.Duration
+	clockSkew   time.Duration
+	enabled     bool
+	logger      *slog.Logger
 }
 
 // NewReplayDetector creates a ReplayDetector with the given configuration.
@@ -117,11 +121,18 @@ func NewReplayDetector(cfg ReplayDetectorConfig, logger *slog.Logger) *ReplayDet
 		logger = slog.Default()
 	}
 
+	nonceSource := cfg.NonceSource
+	if nonceSource == "" {
+		nonceSource = "auto"
+	}
+
 	rd := &ReplayDetector{
-		policy:  cfg.NoncePolicy,
-		window:  cfg.Window,
-		enabled: cfg.Enabled,
-		logger:  logger,
+		policy:      cfg.NoncePolicy,
+		nonceSource: nonceSource,
+		window:      cfg.Window,
+		clockSkew:   cfg.ClockSkew,
+		enabled:     cfg.Enabled,
+		logger:      logger,
 	}
 
 	if cfg.Enabled {
@@ -132,9 +143,11 @@ func NewReplayDetector(cfg ReplayDetectorConfig, logger *slog.Logger) *ReplayDet
 }
 
 // Process returns an http.Handler that checks for replayed requests.
-// It inspects JSON-RPC POST requests, extracts the id field as a nonce,
-// and checks it against the nonce store. Behavior on replay depends on the
-// configured policy: "warn" logs and passes through, "require" returns a 429 error.
+// It inspects requests based on the configured nonce_source, extracts a nonce,
+// and checks it against the nonce store. When an X-Sentinel-Timestamp header is
+// present, it validates the timestamp against the window and clock skew.
+// Behavior on replay depends on the configured policy:
+// "warn" logs and always passes through, "require" returns a 429 error.
 func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !d.enabled {
@@ -157,29 +170,102 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 			return
 		}
 
-		// Read and rewind body
-		body, err := protocol.InspectAndRewind(r, 64*1024)
-		if err != nil {
-			d.logger.Warn("replay: failed to read request body", "error", err)
-			next.ServeHTTP(w, r)
-			return
+		// Extract nonce based on nonce_source
+		var nonce string
+		switch d.nonceSource {
+		case "header":
+			nonce = r.Header.Get("X-Sentinel-Nonce")
+		case "jsonrpc-id":
+			body, err := protocol.InspectAndRewind(r, 1024*1024)
+			if err != nil {
+				d.logger.Warn("replay: failed to read request body", "error", err)
+				next.ServeHTTP(w, r)
+				return
+			}
+			if len(body) > 0 {
+				nonce = extractNonce(body)
+			}
+		default: // "auto"
+			// Try header first, fall back to JSON-RPC id
+			nonce = r.Header.Get("X-Sentinel-Nonce")
+			if nonce == "" {
+				body, err := protocol.InspectAndRewind(r, 1024*1024)
+				if err != nil {
+					d.logger.Warn("replay: failed to read request body", "error", err)
+					next.ServeHTTP(w, r)
+					return
+				}
+				if len(body) > 0 {
+					nonce = extractNonce(body)
+				}
+			}
 		}
 
-		if len(body) == 0 {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Extract the id field as nonce
-		nonce := extractNonce(body)
 		if nonce == "" {
-			// No id field — can't check for replay, pass through
+			// No nonce available — can't check for replay, pass through
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// Determine timestamp
+		now := time.Now()
+		tsHeader := r.Header.Get("X-Sentinel-Timestamp")
+		var ts time.Time
+		hasTimestampHeader := tsHeader != ""
+
+		if hasTimestampHeader {
+			parsed, ok := parseTimestamp(tsHeader)
+			if !ok {
+				d.logger.Warn("replay: invalid timestamp header", "value", tsHeader)
+				if d.policy == "require" {
+					sentinelerrors.WriteHTTPError(w, &sentinelerrors.SentinelError{
+						Code:    429,
+						Message: "Invalid replay timestamp",
+						Hint:    "X-Sentinel-Timestamp must be RFC3339 or 10-digit Unix epoch.",
+						DocsURL: "https://a2a-sentinel.dev/docs/replay-protection",
+					})
+					return
+				}
+				// warn mode: pass through
+				next.ServeHTTP(w, r)
+				return
+			}
+			ts = parsed
+		} else {
+			ts = now
+		}
+
+		// Timestamp validation (only when header is present)
+		if hasTimestampHeader {
+			diff := now.Sub(ts)
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > d.window+d.clockSkew {
+				d.logger.Warn("replay: timestamp outside allowed window",
+					"timestamp", ts,
+					"diff", diff,
+					"window", d.window,
+					"clock_skew", d.clockSkew,
+					"policy", d.policy,
+				)
+				if d.policy == "require" {
+					sentinelerrors.WriteHTTPError(w, &sentinelerrors.SentinelError{
+						Code:    429,
+						Message: "Replay attack detected",
+						Hint:    "Request timestamp is outside the allowed window. Ensure clocks are synchronized.",
+						DocsURL: "https://a2a-sentinel.dev/docs/replay-protection",
+					})
+					return
+				}
+				// warn mode: log only, pass through
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
 		// Check nonce against store
-		isNew, err := d.store.CheckAndStore(nonce, time.Now())
+		isNew, err := d.store.CheckAndStore(nonce, ts)
 		if err != nil {
 			d.logger.Error("replay: nonce store error", "error", err)
 			next.ServeHTTP(w, r)
@@ -188,7 +274,7 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 
 		if !isNew {
 			// Replay detected
-			d.logger.Warn("replay: duplicate request ID detected",
+			d.logger.Warn("replay: duplicate request nonce detected",
 				"nonce", nonce,
 				"policy", d.policy,
 			)
@@ -202,11 +288,31 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 				})
 				return
 			}
-			// policy == "warn": log only, pass through
+			// policy == "warn": log only, always pass through
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// parseTimestamp parses X-Sentinel-Timestamp as RFC3339 or Unix epoch (10-digit).
+func parseTimestamp(s string) (time.Time, bool) {
+	// Try RFC3339 first
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, true
+	}
+	// Try Unix epoch (must be exactly 10 digits)
+	if len(s) == 10 {
+		var epoch int64
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return time.Time{}, false
+			}
+			epoch = epoch*10 + int64(c-'0')
+		}
+		return time.Unix(epoch, 0), true
+	}
+	return time.Time{}, false
 }
 
 // Name returns the middleware name.
