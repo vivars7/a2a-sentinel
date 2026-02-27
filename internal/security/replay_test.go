@@ -2,6 +2,7 @@ package security
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -624,5 +625,386 @@ func TestExtractNonce_DistinctTypes(t *testing.T) {
 
 	if strNonce == numNonce {
 		t.Errorf("string id '1' and numeric id 1 should produce different nonces: both got %q", strNonce)
+	}
+}
+
+func TestReplayDetector_HeaderNonce(t *testing.T) {
+	// X-Sentinel-Nonce header should be used as nonce
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "auto",
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	var backendCalls int
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	// First request with header nonce
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"different-id-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "header-nonce-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", rec.Code)
+	}
+
+	// Second request with same header nonce but different body id — should be blocked (header takes priority)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"different-id-2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "header-nonce-1")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("replay with same header nonce: expected 429, got %d", rec.Code)
+	}
+
+	if backendCalls != 1 {
+		t.Errorf("expected 1 backend call, got %d", backendCalls)
+	}
+}
+
+func TestReplayDetector_HeaderNoncePriority(t *testing.T) {
+	// When nonce_source=auto, header nonce takes priority over JSON-RPC id
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "auto",
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	// Request with header nonce
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"same-body-id"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "unique-header-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	// Same body id but different header nonce — should pass (header is the nonce, not body id)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"same-body-id"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "unique-header-2")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("different header nonce should pass: expected 200, got %d", rec.Code)
+	}
+}
+
+func TestReplayDetector_NonceSourceHeader(t *testing.T) {
+	// nonce_source=header: only use header, ignore body id
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "header",
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	// No header nonce — should pass through (can't check without header)
+	body := `{"jsonrpc":"2.0","method":"test","id":"req-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("no header with source=header: expected 200, got %d", rec.Code)
+	}
+
+	// Same body sent again (no header) — should still pass (header mode ignores body id)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("replay without header in header mode: expected 200 (pass through), got %d", rec.Code)
+	}
+}
+
+func TestReplayDetector_NonceSourceJSONRPCID(t *testing.T) {
+	// nonce_source=jsonrpc-id: only use body id, ignore header
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "jsonrpc-id",
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	var backendCalls int
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	body := `{"jsonrpc":"2.0","method":"test","id":"jsonrpc-only-1"}`
+
+	// First request — passes
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "ignored-header")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first: expected 200, got %d", rec.Code)
+	}
+
+	// Second request with different header but same body id — blocked (uses body id)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "different-header")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("replay of body id: expected 429, got %d", rec.Code)
+	}
+
+	if backendCalls != 1 {
+		t.Errorf("expected 1 backend call, got %d", backendCalls)
+	}
+}
+
+func TestReplayDetector_TimestampValidation(t *testing.T) {
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "auto",
+		ClockSkew:       5 * time.Second,
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	// Valid RFC3339 timestamp
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"ts-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "ts-nonce-1")
+	req.Header.Set("X-Sentinel-Timestamp", time.Now().UTC().Format(time.RFC3339))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("valid timestamp: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Expired timestamp (way in the past)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"ts-2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "ts-nonce-2")
+	req.Header.Set("X-Sentinel-Timestamp", time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("expired timestamp: expected 429, got %d", rec.Code)
+	}
+
+	// Future timestamp (beyond clock_skew)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"ts-3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "ts-nonce-3")
+	req.Header.Set("X-Sentinel-Timestamp", time.Now().Add(10*time.Minute).UTC().Format(time.RFC3339))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("future timestamp: expected 429, got %d", rec.Code)
+	}
+}
+
+func TestReplayDetector_TimestampEpoch(t *testing.T) {
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "auto",
+		ClockSkew:       5 * time.Second,
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	// Valid epoch timestamp (10 digits)
+	epoch := fmt.Sprintf("%d", time.Now().Unix())
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"epoch-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "epoch-nonce-1")
+	req.Header.Set("X-Sentinel-Timestamp", epoch)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("valid epoch: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReplayDetector_TimestampWarnMode(t *testing.T) {
+	// In warn mode, expired timestamps should warn but still pass through
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "warn",
+		NonceSource:     "auto",
+		ClockSkew:       5 * time.Second,
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	var backendCalls int
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	// Expired timestamp in warn mode — should pass through
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"warn-ts-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "warn-ts-nonce-1")
+	req.Header.Set("X-Sentinel-Timestamp", time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("warn mode with expired timestamp: expected 200, got %d", rec.Code)
+	}
+
+	// Replay in warn mode — should also pass through
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"warn-ts-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "warn-ts-nonce-1")
+	req.Header.Set("X-Sentinel-Timestamp", time.Now().UTC().Format(time.RFC3339))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("warn mode replay: expected 200, got %d", rec.Code)
+	}
+
+	if backendCalls != 2 {
+		t.Errorf("warn mode: expected 2 backend calls, got %d", backendCalls)
+	}
+}
+
+func TestReplayDetector_NoTimestampHeader(t *testing.T) {
+	// Without X-Sentinel-Timestamp header, timestamp validation should not apply
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "auto",
+		ClockSkew:       5 * time.Second,
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	// No timestamp header — should use time.Now() and pass through
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"no-ts-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("no timestamp header: expected 200, got %d", rec.Code)
+	}
+}
+
+func TestParseTimestamp(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		valid bool
+	}{
+		{"RFC3339", time.Now().UTC().Format(time.RFC3339), true},
+		{"epoch 10 digits", "1700000000", true},
+		{"epoch 9 digits", "170000000", false},
+		{"epoch 11 digits", "17000000000", false},
+		{"not a number", "abcdefghij", false},
+		{"empty", "", false},
+		{"RFC3339 with millis", "2025-01-01T00:00:00.000Z", true}, // Go's time.RFC3339 accepts fractional seconds
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := parseTimestamp(tc.input)
+			if ok != tc.valid {
+				t.Errorf("parseTimestamp(%q) = _, %v; want %v", tc.input, ok, tc.valid)
+			}
+		})
+	}
+}
+
+func TestReplayDetector_AutoFallbackToBodyID(t *testing.T) {
+	// When nonce_source=auto and no header, should fall back to JSON-RPC id
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "auto",
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	var backendCalls int
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	body := `{"jsonrpc":"2.0","method":"test","id":"fallback-1"}`
+
+	// First request without header — uses body id
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first: expected 200, got %d", rec.Code)
+	}
+
+	// Replay of same body id — blocked
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("body id replay: expected 429, got %d", rec.Code)
+	}
+
+	if backendCalls != 1 {
+		t.Errorf("expected 1 backend call, got %d", backendCalls)
 	}
 }

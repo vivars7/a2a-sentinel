@@ -60,10 +60,13 @@ func Diff(old, new *Config) []Change {
 	diffField(&changes, "security.replay.enabled", old.Security.Replay.Enabled, new.Security.Replay.Enabled, true)
 	diffField(&changes, "security.replay.window", old.Security.Replay.Window.Duration, new.Security.Replay.Window.Duration, true)
 	diffField(&changes, "security.replay.nonce_policy", old.Security.Replay.NoncePolicy, new.Security.Replay.NoncePolicy, true)
+	diffField(&changes, "security.replay.nonce_source", old.Security.Replay.NonceSource, new.Security.Replay.NonceSource, true)
+	diffField(&changes, "security.replay.clock_skew", old.Security.Replay.ClockSkew.Duration, new.Security.Replay.ClockSkew.Duration, true)
 	diffField(&changes, "security.push.block_private_networks", old.Security.Push.BlockPrivateNetworks, new.Security.Push.BlockPrivateNetworks, true)
 	diffField(&changes, "security.push.require_https", old.Security.Push.RequireHTTPS, new.Security.Push.RequireHTTPS, true)
 	diffField(&changes, "security.push.require_challenge", old.Security.Push.RequireChallenge, new.Security.Push.RequireChallenge, true)
 	diffStringSlice(&changes, "security.push.allowed_domains", old.Security.Push.AllowedDomains, new.Security.Push.AllowedDomains, true)
+	diffField(&changes, "security.push.dns_fail_policy", old.Security.Push.DNSFailPolicy, new.Security.Push.DNSFailPolicy, true)
 
 	// ── Reloadable: logging ──
 	diffField(&changes, "logging.level", old.Logging.Level, new.Logging.Level, true)

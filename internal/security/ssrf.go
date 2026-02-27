@@ -41,6 +41,7 @@ type SSRFChecker struct {
 	blockPrivate   bool
 	allowedDomains []string
 	requireHTTPS   bool
+	dnsFailPolicy  string // "block" or "allow"
 	logger         *slog.Logger
 }
 
@@ -49,10 +50,15 @@ func NewSSRFChecker(cfg config.PushConfig, logger *slog.Logger) *SSRFChecker {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	dnsPolicy := cfg.DNSFailPolicy
+	if dnsPolicy == "" {
+		dnsPolicy = "block"
+	}
 	return &SSRFChecker{
 		blockPrivate:   cfg.BlockPrivateNetworks,
 		allowedDomains: cfg.AllowedDomains,
 		requireHTTPS:   cfg.RequireHTTPS,
+		dnsFailPolicy:  dnsPolicy,
 		logger:         logger,
 	}
 }
@@ -82,6 +88,58 @@ func IsPrivateNetwork(host string) bool {
 	ips, err := net.LookupHost(hostname)
 	if err != nil {
 		// If DNS fails, treat as potentially private (fail-closed)
+		return true
+	}
+
+	for _, ipStr := range ips {
+		if ip := net.ParseIP(ipStr); ip != nil {
+			if isPrivateIP(ip) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// isPrivateNetworkWithPolicy checks whether the host resolves to a private network.
+// When DNS lookup fails, behavior depends on dnsFailPolicy:
+// "block" (default) treats DNS failures as private (fail-closed).
+// "allow" treats DNS failures as non-private (fail-open).
+func (s *SSRFChecker) isPrivateNetworkWithPolicy(host string) bool {
+	// Strip port if present
+	hostname := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostname = h
+	}
+
+	// Check well-known private hostnames
+	lower := strings.ToLower(hostname)
+	if lower == "localhost" || strings.HasSuffix(lower, ".local") {
+		return true
+	}
+
+	// Try parsing as IP directly
+	if ip := net.ParseIP(hostname); ip != nil {
+		return isPrivateIP(ip)
+	}
+
+	// Resolve hostname to IPs
+	ips, err := net.LookupHost(hostname)
+	if err != nil {
+		// DNS failure: policy determines behavior
+		if s.dnsFailPolicy == "allow" {
+			s.logger.Warn("ssrf: DNS lookup failed, allowing per dns_fail_policy",
+				"host", hostname,
+				"error", err.Error(),
+			)
+			return false
+		}
+		// Default: "block" (fail-closed)
+		s.logger.Warn("ssrf: DNS lookup failed, blocking per dns_fail_policy",
+			"host", hostname,
+			"error", err.Error(),
+		)
 		return true
 	}
 
@@ -139,7 +197,7 @@ func (s *SSRFChecker) ValidatePushURL(rawURL string) error {
 
 	// Check private network (includes DNS rebinding defense via resolution)
 	if s.blockPrivate {
-		if IsPrivateNetwork(parsed.Host) {
+		if s.isPrivateNetworkWithPolicy(parsed.Host) {
 			return fmt.Errorf("push notification URL resolves to private network: %s", host)
 		}
 	}

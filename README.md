@@ -154,38 +154,38 @@ The gRPC binding translates A2A protocol messages to/from JSON-RPC internally. A
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│                  a2a-sentinel Gateway                      │
-│                                                            │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐│
-│  │ Security │→│ Policy   │→│ Protocol │→│  Router    ││
-│  │ Layer    │  │ Engine   │  │ Detector │  │           ││
-│  │(2-tier)  │  │ (ABAC)   │  │          │  │           ││
-│  └──────────┘  └──────────┘  └──────────┘  └───────────┘│
-│       │                                         │        │
-│  ┌─────────┐  ┌──────────────┐        ┌──────────────┐  │
-│  │  Audit  │  │ Agent Card   │        │    Proxy     │  │
-│  │  Logger │  │ Manager      │        │ HTTP/SSE/gRPC│  │
-│  │(OTel)   │  │(polling+agg) │        │             │  │
-│  └─────────┘  └──────────────┘        └──────────────┘  │
-│                                              │           │
-│  ┌────────────────────┐  ┌───────────────────────────┐  │
-│  │ gRPC Server (:8443)│  │ Config Hot-Reload         │  │
-│  │ A2A gRPC binding   │  │ SIGHUP + fsnotify watch   │  │
-│  │ ↔ JSON-RPC transl. │  │ Debounce + atomic swap    │  │
-│  └────────────────────┘  └───────────────────────────┘  │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │ MCP Server (127.0.0.1:8081) — 15 tools          │   │
-│  │ Read:  list_agents, get_agent_status,            │   │
-│  │        get_aggregated_card, health_check,        │   │
-│  │        get_config, get_audit_log, get_metrics    │   │
-│  │ Write: update_rate_limit, reload_config,         │   │
-│  │        toggle_agent, rotate_api_key,             │   │
-│  │        flush_replay_cache, trigger_card_poll     │   │
-│  │ Card:  list_pending_changes,                     │   │
-│  │        approve_card_change, reject_card_change   │   │
-│  │ Policy: list_policies, evaluate_policy           │   │
-│  └──────────────────────────────────────────────────┘   │
+│                   a2a-sentinel Gateway                    │
+│                                                           │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │ Security │→ │ Policy   │→ │ Protocol │→ │  Router  │   │
+│  │ Layer    │  │ Engine   │  │ Detector │  │          │   │
+│  │ (2-tier) │  │ (ABAC)   │  │          │  │          │   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+│       │                                        │          │
+│  ┌─────────┐  ┌──────────────┐        ┌──────────────┐    │
+│  │  Audit  │  │ Agent Card   │        │    Proxy     │    │
+│  │  Logger │  │ Manager      │        │ HTTP/SSE/gRPC│    │
+│  │ (OTel)  │  │ (polling+agg)│        │              │    │
+│  └─────────┘  └──────────────┘        └──────────────┘    │
+│                                              │            │
+│  ┌────────────────────┐  ┌───────────────────────────┐    │
+│  │ gRPC Server (:8443)│  │ Config Hot-Reload         │    │
+│  │ A2A gRPC binding   │  │ SIGHUP + fsnotify watch   │    │
+│  │ ↔ JSON-RPC transl. │  │ Debounce + atomic swap    │    │
+│  └────────────────────┘  └───────────────────────────┘    │
+│                                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ MCP Server (127.0.0.1:8081) — 15 tools             │   │
+│  │ Read:  list_agents, get_agent_status,               │  │
+│  │        get_aggregated_card, health_check,           │  │
+│  │        get_config, get_audit_log, get_metrics       │  │
+│  │ Write: update_rate_limit, reload_config,            │  │
+│  │        toggle_agent, rotate_api_key,                │  │
+│  │        flush_replay_cache, trigger_card_poll        │  │
+│  │ Card:  list_pending_changes,                        │  │
+│  │        approve_card_change, reject_card_change      │  │
+│  │ Policy: list_policies, evaluate_policy              │  │
+│  └─────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────┘
 ```
 
@@ -330,8 +330,8 @@ See `sentinel.yaml.example` for all available options including:
 - **agents**: Health checks, polling intervals, timeouts, max concurrent streams
 - **security.auth**: JWT issuer/audience/jwks_url, API key validation, passthrough modes
 - **security.rate_limit**: IP limits, user limits, per-agent limits, cleanup intervals
-- **security.replay**: Nonce tracking (memory or Redis), configurable window
-- **security.push**: SSRF defense (block private networks), allowed domains, HMAC signing
+- **security.replay**: Nonce tracking (memory or Redis), configurable window, nonce_source, clock_skew
+- **security.push**: SSRF defense (block private networks), allowed domains, HMAC signing, dns_fail_policy
 - **security.policies**: ABAC rules with IP, user, agent, method, time, header conditions
 - **body_inspection**: Max body size, skip for streaming requests
 - **card**: Aggregation mode, JWK file for signing
@@ -607,6 +607,9 @@ See [docs/MIGRATION.md](docs/MIGRATION.md) for the full migration guide.
 - Helm chart for Kubernetes deployment
 - ABAC policy engine (IP, user, agent, method, time-based, header rules)
 - Policy evaluation MCP tools
+- Replay detection: nonce_source priority + timestamp validation with clock_skew (v0.3.1)
+- SSRF checker: configurable dns_fail_policy for DNS failures (v0.3.1)
+- Consistent HTTP 502 handling across all error mapping systems (v0.3.1)
 
 **v1.0 (Planned)**
 - OPA policy integration

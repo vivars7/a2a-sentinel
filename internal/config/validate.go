@@ -94,6 +94,16 @@ func Validate(cfg *Config) error {
 		errs = append(errs, fmt.Sprintf("security.replay.nonce_policy must be one of: warn, require (got %q)", cfg.Security.Replay.NoncePolicy))
 	}
 
+	// ── Nonce source ──
+	if !isValidNonceSource(cfg.Security.Replay.NonceSource) {
+		errs = append(errs, fmt.Sprintf("security.replay.nonce_source must be one of: auto, header, jsonrpc-id (got %q)", cfg.Security.Replay.NonceSource))
+	}
+
+	// ── DNS fail policy ──
+	if !isValidDNSFailPolicy(cfg.Security.Push.DNSFailPolicy) {
+		errs = append(errs, fmt.Sprintf("security.push.dns_fail_policy must be one of: block, allow (got %q)", cfg.Security.Push.DNSFailPolicy))
+	}
+
 	// ── TLS files ──
 	if cfg.Listen.TLS.CertFile != "" {
 		if _, err := os.Stat(cfg.Listen.TLS.CertFile); err != nil {
@@ -163,6 +173,22 @@ func isValidCardChangePolicy(p string) bool {
 func isValidNoncePolicy(p string) bool {
 	switch p {
 	case "warn", "require":
+		return true
+	}
+	return false
+}
+
+func isValidNonceSource(s string) bool {
+	switch s {
+	case "auto", "header", "jsonrpc-id":
+		return true
+	}
+	return false
+}
+
+func isValidDNSFailPolicy(p string) bool {
+	switch p {
+	case "block", "allow":
 		return true
 	}
 	return false

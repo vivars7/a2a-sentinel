@@ -164,6 +164,8 @@ type ReplayConfig struct {
 	Enabled         bool     `yaml:"enabled"`
 	Window          Duration `yaml:"window"`
 	NoncePolicy     string   `yaml:"nonce_policy"`
+	NonceSource     string   `yaml:"nonce_source"`  // "auto", "header", "jsonrpc-id"
+	ClockSkew       Duration `yaml:"clock_skew"`     // tolerance for timestamp validation
 	Store           string   `yaml:"store"`
 	RedisURL        string   `yaml:"redis_url"`
 	CleanupInterval Duration `yaml:"cleanup_interval"`
@@ -198,6 +200,7 @@ type PushConfig struct {
 	RequireHTTPS         bool     `yaml:"require_https"`
 	RequireChallenge     bool     `yaml:"require_challenge"`
 	HMACSecret           string   `yaml:"hmac_secret"`
+	DNSFailPolicy        string   `yaml:"dns_fail_policy"` // "block" or "allow"
 }
 
 // BodyInspectionConfig controls how request bodies are read and inspected.

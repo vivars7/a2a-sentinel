@@ -455,6 +455,8 @@ func (s *Server) buildSecurityPipelineConfig() security.SecurityPipelineConfig {
 			Enabled:         s.cfg.Security.Replay.Enabled,
 			Window:          s.cfg.Security.Replay.Window.Duration,
 			NoncePolicy:     s.cfg.Security.Replay.NoncePolicy,
+			NonceSource:     s.cfg.Security.Replay.NonceSource,
+			ClockSkew:       s.cfg.Security.Replay.ClockSkew.Duration,
 			CleanupInterval: s.cfg.Security.Replay.CleanupInterval.Duration,
 		},
 		GlobalRateLimit: s.cfg.Listen.GlobalRateLimit,

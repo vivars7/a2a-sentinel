@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.1] - 2026-02-27
+
+### Fixed
+- Replay detection: nonce source priority (X-Sentinel-Nonce header > JSON-RPC id) with `nonce_source` config (auto/header/jsonrpc-id)
+- Replay detection: timestamp validation via X-Sentinel-Timestamp header (RFC3339 + Unix epoch) with `clock_skew` tolerance
+- Replay detection: warn mode never blocks requests (always passes through)
+- Replay detection: body inspection limit increased to 1MB
+- SSRF checker: configurable `dns_fail_policy` (block/allow) for DNS resolution failures
+- gRPC error mapping: added HTTP 502 → gRPC Unavailable mapping
+- gRPC error messages: preserve hint and docs_url for educational errors
+- JSON-RPC error mapping: added HTTP 502 → -32603 mapping
+- JWS stub: removed noisy per-request log.Println from pipeline middleware
+
+### Changed
+- Dev/prod profiles updated with `nonce_source`, `clock_skew`, `dns_fail_policy`, and `grpc_port` fields
+- All three error mapping systems (HTTP/JSON-RPC/gRPC) now consistently handle HTTP 502
+
+### Added
+- SSRF test suite (`internal/security/ssrf_test.go`)
+- gRPC interceptor, error mapping, and context merge tests
+- Config validation for `nonce_source` and `dns_fail_policy` fields
+
 ## [0.3.0] - 2026-02-27
 
 ### Added

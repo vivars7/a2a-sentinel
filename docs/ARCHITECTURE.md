@@ -26,63 +26,63 @@ a2a-sentinel is a lightweight, security-first A2A (Agent-to-Agent) protocol gate
 ┌──────────────────────────┐   ┌──────────────────────────┐
 │   HTTP/SSE Client (:8080)│   │   gRPC Client (:8443)    │
 └────────────┬─────────────┘   └────────────┬─────────────┘
-             │                              │
-             ▼                              ▼
+             │                               │
+             ▼                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Sentinel Security Gateway                      │
+│                  Sentinel Security Gateway                      │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
+│                                                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ 1. Protocol Detection                                      │ │
-│  │    (JSON-RPC vs REST vs SSE vs gRPC)                      │ │
+│  │    (JSON-RPC vs REST vs SSE vs gRPC)                       │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                               │                                  │
-│                               ▼                                  │
+│                               │                                 │
+│                               ▼                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ 2. Security Pipeline (2-Layer)                             │ │
-│  │                                                             │ │
-│  │   Pre-Auth:  Global Rate Limit → IP Rate Limit            │ │
-│  │   Auth:      JWT / API Key / Passthrough                  │ │
-│  │   Post-Auth: User Rate Limit                              │ │
+│  │                                                            │ │
+│  │   Pre-Auth:  Global Rate Limit → IP Rate Limit             │ │
+│  │   Auth:      JWT / API Key / Passthrough                   │ │
+│  │   Post-Auth: User Rate Limit                               │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                               │                                  │
-│                               ▼                                  │
+│                               │                                 │
+│                               ▼                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ 3. PolicyGuard (ABAC)                                      │ │
-│  │    IP, user, agent, method, time, header rule evaluation  │ │
+│  │    IP, user, agent, method, time, header rule evaluation   │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                               │                                  │
-│                               ▼                                  │
+│                               │                                 │
+│                               ▼                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ 4. Router                                                  │ │
-│  │    (Path-prefix or Single agent routing)                  │ │
+│  │    (Path-prefix or Single agent routing)                   │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                               │                                  │
-│                               ▼                                  │
+│                               │                                 │
+│                               ▼                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ 5. Proxy                                                   │ │
-│  │    HTTP / SSE / gRPC (no httputil.ReverseProxy)           │ │
-│  │    gRPC ↔ JSON-RPC translation for backend agents         │ │
+│  │    HTTP / SSE / gRPC (no httputil.ReverseProxy)            │ │
+│  │    gRPC ↔ JSON-RPC translation for backend agents          │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                               │                                  │
-│                               ▼                                  │
+│                               │                                 │
+│                               ▼                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │ 6. Audit Logging (OTel-compatible) + Prometheus Metrics   │ │
+│  │ 6. Audit Logging (OTel-compatible) + Prometheus Metrics    │ │
 │  │    All decisions recorded with structured fields           │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                                                                   │
+│                                                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ Config Hot-Reload (SIGHUP + fsnotify)                      │ │
-│  │    Validate → Diff → Atomic Swap → Notify components      │ │
+│  │    Validate → Diff → Atomic Swap → Notify components       │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│                                                                   │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                 Backend Agent(s)                                │
-│  (echo, streaming, or any A2A-compliant service)              │
-│  (always HTTP — gRPC translation handled by sentinel)         │
+│                Backend Agent(s)                                 │
+│  (echo, streaming, or any A2A-compliant service)                │
+│  (always HTTP — gRPC translation handled by sentinel)           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -300,18 +300,18 @@ Request Flow:
 ┌──────────────────────────────────────────────────┐
 │ Layer 1: PRE-AUTH (early termination)            │
 ├──────────────────────────────────────────────────┤
-│ 1. GlobalRateLimiter    → Max N req/sec total   │
-│ 2. IPRateLimiter        → Max N req/sec per IP  │
-│ 3. ClientIPExtractor    → Extract real IP       │
+│ 1. GlobalRateLimiter    → Max N req/sec total    │
+│ 2. IPRateLimiter        → Max N req/sec per IP   │
+│ 3. ClientIPExtractor    → Extract real IP        │
 └──────────────────────────────────────────────────┘
                            ↓
 ┌──────────────────────────────────────────────────┐
 │ Layer 2: AUTH & POST-AUTH                        │
 ├──────────────────────────────────────────────────┤
-│ 4. AuthMiddleware       → JWT/API-Key validation│
-│ 5. UserRateLimiter      → Max M req/sec per user│
-│ 6. PolicyGuard (ABAC)   → Policy rule evaluation│
-│ 7. JWSVerifier          → Agent Card JWS check  │
+│ 4. AuthMiddleware       → JWT/API-Key validation │
+│ 5. UserRateLimiter      → Max M req/sec per user │
+│ 6. PolicyGuard (ABAC)   → Policy rule evaluation │
+│ 7. JWSVerifier          → Agent Card JWS check   │
 │ 8. ReplayDetector       → Nonce + timestamp      │
 │ 9. SSRFChecker          → Private network block  │
 └──────────────────────────────────────────────────┘
@@ -343,14 +343,17 @@ Request Flow:
 - **ReplayDetector** — Nonce + timestamp replay prevention
   - Tracks request nonces in memory (or Redis)
   - Configurable policies: `warn` (log only) or `require` (reject duplicates)
+  - Nonce source priority: `X-Sentinel-Nonce` header > JSON-RPC `id` (configurable via `nonce_source`)
+  - Timestamp validation via `X-Sentinel-Timestamp` header (RFC3339 + Unix epoch) with `clock_skew` tolerance
   - Background cleanup of expired nonces
-  - Configurable: `security.replay.window`, `security.replay.nonce_policy`
+  - Configurable: `security.replay.window`, `security.replay.nonce_policy`, `security.replay.nonce_source`, `security.replay.clock_skew`
 
 - **SSRFChecker** — Push notification SSRF protection
   - Blocks push notification URLs resolving to private networks
   - Validates against domain allowlist
   - Enforces HTTPS requirement
-  - Configurable: `security.push.block_private_networks`, `security.push.allowed_domains`
+  - Configurable DNS failure policy: `block` (fail-closed) or `allow` (fail-open)
+  - Configurable: `security.push.block_private_networks`, `security.push.allowed_domains`, `security.push.dns_fail_policy`
 
 - **PolicyGuard** — ABAC policy engine middleware
   - Evaluates attribute-based access control rules after authentication
@@ -761,7 +764,7 @@ The SSE proxy uses a goroutine+channel pattern for reliable streaming:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ Main Goroutine                                   │
+│ Main Goroutine                                  │
 ├─────────────────────────────────────────────────┤
 │ 1. Acquire stream slot                          │
 │ 2. Create backend request                       │
@@ -782,7 +785,7 @@ The SSE proxy uses a goroutine+channel pattern for reliable streaming:
 ├─────────────────────────────────────────────────┤
 │ 1. Connect to backend                           │
 │ 2. Read lines from response body                │
-│ 3. Parse SSE format (data: ..., event: ...)    │
+│ 3. Parse SSE format (data: ..., event: ...)     │
 │ 4. Send lines to channel                        │
 │ 5. Validate against maxEventSize                │
 │ 6. Close channel on EOF or error                │
@@ -849,7 +852,7 @@ a2a-sentinel supports the A2A gRPC binding on a separate port (default 8443). Th
 For `StreamMessage` (server-streaming RPC):
 
 ```
-gRPC Client                    Sentinel                    Backend Agent
+gRPC Client                    Sentinel               Backend Agent
     │                              │                              │
     │── StreamMessage request ────▶│                              │
     │                              │── JSON-RPC message/stream ──▶│
