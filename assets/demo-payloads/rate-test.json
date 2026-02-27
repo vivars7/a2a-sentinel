@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "rate-test",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "role": "user",
+      "parts": [{"text": "test"}]
+    }
+  }
+}

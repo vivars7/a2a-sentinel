@@ -8,6 +8,8 @@
 
 Develop with sentinel, deploy with agentgateway. Zero agent code changes.
 
+![a2a-sentinel demo](assets/demo-hero.gif)
+
 ---
 
 ## Why sentinel?
@@ -175,7 +177,7 @@ The gRPC binding translates A2A protocol messages to/from JSON-RPC internally. A
 │  └────────────────────┘  └───────────────────────────┘    │
 │                                                           │
 │  ┌─────────────────────────────────────────────────────┐  │
-│  │ MCP Server (127.0.0.1:8081) — 15 tools             │   │
+│  │ MCP Server (127.0.0.1:8081) — 15 tools              │  │
 │  │ Read:  list_agents, get_agent_status,               │  │
 │  │        get_aggregated_card, health_check,           │  │
 │  │        get_config, get_audit_log, get_metrics       │  │
@@ -343,6 +345,13 @@ See `sentinel.yaml.example` for all available options including:
 ---
 
 ## Security
+
+<details>
+<summary>See security features in action (rate limiting, replay detection, educational errors)</summary>
+
+![a2a-sentinel security demo](assets/demo-security.gif)
+
+</details>
 
 ### Authentication Modes
 

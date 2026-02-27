@@ -1,0 +1,47 @@
+# sentinel-security-demo.yaml — Used for VHS security demo recording
+# Enables security features so we can show rate limiting, replay detection, etc.
+
+agents:
+  - name: echo
+    url: http://echo-agent:9000
+    default: true
+    allow_insecure: true
+    poll_interval: 10s
+  - name: streaming
+    url: http://streaming-agent:9001
+    allow_insecure: true
+    poll_interval: 10s
+
+security:
+  auth:
+    mode: passthrough-strict
+    allow_unauthenticated: true
+
+  rate_limit:
+    enabled: true
+    ip:
+      per_ip: 10
+      burst: 3
+    user:
+      per_user: 10
+      burst: 3
+    per_agent: 10
+
+  replay:
+    enabled: true
+    window: 300s
+    nonce_policy: require
+    nonce_source: auto
+    clock_skew: 5s
+
+mcp:
+  enabled: true
+  host: 0.0.0.0
+  port: 8081
+
+routing:
+  mode: path-prefix
+
+logging:
+  level: debug
+  format: text
