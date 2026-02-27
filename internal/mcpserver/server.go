@@ -359,6 +359,40 @@ func toolsList() []toolDefinition {
 				"required": []string{"agent_name", "text"},
 			},
 		},
+		// Policy tools
+		{
+			Name:        "list_policies",
+			Description: "List all configured ABAC access control policies and their match conditions.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			Name:        "evaluate_policy",
+			Description: "Evaluate what policy decision would be made for a given set of request attributes.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent": map[string]any{
+						"type":        "string",
+						"description": "Agent name to evaluate against",
+					},
+					"method": map[string]any{
+						"type":        "string",
+						"description": "A2A method (e.g. message/send)",
+					},
+					"user": map[string]any{
+						"type":        "string",
+						"description": "Authenticated user/subject",
+					},
+					"ip": map[string]any{
+						"type":        "string",
+						"description": "Client IP address",
+					},
+				},
+			},
+		},
 		// Card change approval tools
 		{
 			Name:        "list_pending_changes",

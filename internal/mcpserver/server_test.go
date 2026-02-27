@@ -55,6 +55,10 @@ type mockBridge struct {
 	approveCardErr      error
 	rejectCardErr       error
 
+	// Policy fields
+	policies         []PolicyInfo
+	policyEvalResult PolicyEvalResult
+
 	// Error injection
 	getAgentCardErr    error
 	getAggregatedErr   error
@@ -177,6 +181,14 @@ func (m *mockBridge) RejectCardChange(agentName string) error {
 	return nil
 }
 
+func (m *mockBridge) ListPolicies() []PolicyInfo {
+	return m.policies
+}
+
+func (m *mockBridge) EvaluatePolicy(req PolicyEvalRequest) PolicyEvalResult {
+	return m.policyEvalResult
+}
+
 // blockingBridge blocks ListAgents until blockCh is closed. Used to simulate
 // an active connection during Shutdown tests.
 type blockingBridge struct {
@@ -204,6 +216,10 @@ func (b *blockingBridge) GetSecurityReport() map[string]interface{}          { r
 func (b *blockingBridge) ListPendingChanges() []PendingCardChange            { return nil }
 func (b *blockingBridge) ApproveCardChange(_ string) error                   { return nil }
 func (b *blockingBridge) RejectCardChange(_ string) error                    { return nil }
+func (b *blockingBridge) ListPolicies() []PolicyInfo                         { return nil }
+func (b *blockingBridge) EvaluatePolicy(_ PolicyEvalRequest) PolicyEvalResult {
+	return PolicyEvalResult{Action: "allow"}
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -427,7 +443,7 @@ func TestInitialize_HasResourcesCapability(t *testing.T) {
 
 // ── tools/list ────────────────────────────────────────────────────────────────
 
-func TestToolsList_ReturnsThirteenTools(t *testing.T) {
+func TestToolsList_ReturnsFifteenTools(t *testing.T) {
 	_, srv := newTestServer(t, "")
 	resp := postRPC(t, srv.URL, jsonRPCRequest{
 		JSONRPC: "2.0",
@@ -447,8 +463,8 @@ func TestToolsList_ReturnsThirteenTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tools slice, got %T", result["tools"])
 	}
-	if len(tools) != 13 {
-		t.Errorf("expected 13 tools, got %d", len(tools))
+	if len(tools) != 15 {
+		t.Errorf("expected 15 tools, got %d", len(tools))
 	}
 }
 
