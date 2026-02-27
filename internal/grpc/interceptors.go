@@ -177,6 +177,8 @@ func httpStatusToGRPCCode(httpCode int) codes.Code {
 		return codes.AlreadyExists
 	case http.StatusTooManyRequests:
 		return codes.ResourceExhausted
+	case http.StatusBadGateway:
+		return codes.Unavailable
 	case http.StatusServiceUnavailable:
 		return codes.Unavailable
 	default:
