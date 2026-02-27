@@ -101,6 +101,12 @@ func (s *Server) handleToolsCall(req jsonRPCRequest) jsonRPCResponse {
 	case "send_test_message":
 		result, err = s.toolSendTestMessage(params.Arguments)
 
+	// Policy tools
+	case "list_policies":
+		result, err = s.toolListPolicies()
+	case "evaluate_policy":
+		result, err = s.toolEvaluatePolicy(params.Arguments)
+
 	// Card change approval tools
 	case "list_pending_changes":
 		result, err = s.toolListPendingChanges()
@@ -323,6 +329,40 @@ func (s *Server) toolSendTestMessage(raw json.RawMessage) (toolResult, error) {
 	if err != nil {
 		return toolResult{}, err
 	}
+	return textResult(result)
+}
+
+// ── policy tool handlers ────────────────────────────────────────────────────
+
+// toolListPolicies returns the current active ABAC policies.
+func (s *Server) toolListPolicies() (toolResult, error) {
+	policies := s.bridge.ListPolicies()
+	return textResult(policies)
+}
+
+// evaluatePolicyArgs holds the arguments for evaluate_policy.
+type evaluatePolicyArgs struct {
+	Agent  string `json:"agent"`
+	Method string `json:"method"`
+	User   string `json:"user"`
+	IP     string `json:"ip"`
+}
+
+// toolEvaluatePolicy evaluates what policy decision would be made for the given attributes.
+func (s *Server) toolEvaluatePolicy(raw json.RawMessage) (toolResult, error) {
+	var args evaluatePolicyArgs
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return toolResult{}, fmt.Errorf("parsing arguments: %w", err)
+		}
+	}
+
+	result := s.bridge.EvaluatePolicy(PolicyEvalRequest{
+		Agent:  args.Agent,
+		Method: args.Method,
+		User:   args.User,
+		IP:     args.IP,
+	})
 	return textResult(result)
 }
 

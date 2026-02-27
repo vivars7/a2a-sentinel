@@ -26,6 +26,10 @@ type SentinelBridge interface {
 	ApproveCardChange(agentName string) error
 	RejectCardChange(agentName string) error
 
+	// Policy methods
+	ListPolicies() []PolicyInfo
+	EvaluatePolicy(req PolicyEvalRequest) PolicyEvalResult
+
 	// Resource methods
 	GetConfig() map[string]interface{}
 	GetMetrics() map[string]interface{}
@@ -80,4 +84,45 @@ type PendingCardChange struct {
 	Changes    int       `json:"changes_count"`
 	Critical   bool      `json:"has_critical"`
 	Status     string    `json:"status"`
+}
+
+// PolicyInfo describes a configured ABAC policy.
+type PolicyInfo struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Action      string            `json:"action"`
+	Priority    int               `json:"priority"`
+	Match       PolicyMatchInfo   `json:"match"`
+}
+
+// PolicyMatchInfo describes the match conditions for a policy.
+type PolicyMatchInfo struct {
+	Agents    []string          `json:"agents,omitempty"`
+	Methods   []string          `json:"methods,omitempty"`
+	Users     []string          `json:"users,omitempty"`
+	IPs       []string          `json:"ips,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	TimeRange *TimeRangeInfo    `json:"time_range,omitempty"`
+}
+
+// TimeRangeInfo describes a time range restriction.
+type TimeRangeInfo struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+	TZ    string `json:"tz"`
+}
+
+// PolicyEvalRequest is the input for a policy evaluation query.
+type PolicyEvalRequest struct {
+	Agent  string `json:"agent"`
+	Method string `json:"method"`
+	User   string `json:"user"`
+	IP     string `json:"ip"`
+}
+
+// PolicyEvalResult is the output of a policy evaluation query.
+type PolicyEvalResult struct {
+	Action        string `json:"action"`
+	MatchedPolicy string `json:"matched_policy"`
+	Reason        string `json:"reason"`
 }

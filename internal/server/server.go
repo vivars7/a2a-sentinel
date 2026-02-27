@@ -460,6 +460,7 @@ func (s *Server) buildSecurityPipelineConfig() security.SecurityPipelineConfig {
 		GlobalRateLimit: s.cfg.Listen.GlobalRateLimit,
 		TrustedProxies:  s.cfg.Listen.TrustedProxies,
 		Push:            s.cfg.Security.Push,
+		Policies:        s.cfg.Security.Policies,
 		Logger:          s.logger,
 	}
 

@@ -28,6 +28,7 @@ type SecurityPipelineConfig struct {
 	GlobalRateLimit int
 	TrustedProxies  []string
 	Push            config.PushConfig
+	Policies        []config.PolicyConfig
 	Logger          *slog.Logger
 }
 
@@ -82,6 +83,13 @@ func BuildPipeline(cfg SecurityPipelineConfig) []Middleware {
 			cfg.RateLimit.UserBurst,
 			cfg.RateLimit.UserCleanupInterval,
 		))
+	}
+
+	// ABAC policy engine (only if policies are configured)
+	if len(cfg.Policies) > 0 {
+		policies := ConvertPolicies(cfg.Policies)
+		engine := NewPolicyEngine(policies, cfg.Logger)
+		mws = append(mws, NewPolicyGuard(engine, cfg.Logger))
 	}
 
 	// JWS verification (v0.2 stub)

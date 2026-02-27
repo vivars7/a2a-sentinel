@@ -103,6 +103,33 @@ type SecurityConfig struct {
 	Replay        ReplayConfig        `yaml:"replay"`
 	RateLimit     RateLimitConfig     `yaml:"rate_limit"`
 	Push          PushConfig          `yaml:"push"`
+	Policies      []PolicyConfig      `yaml:"policies"`
+}
+
+// PolicyConfig defines an ABAC access control rule in configuration.
+type PolicyConfig struct {
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Match       PolicyMatchConfig `yaml:"match"`
+	Action      string            `yaml:"action"`   // "allow" or "deny"
+	Priority    int               `yaml:"priority"`  // higher = evaluated first
+}
+
+// PolicyMatchConfig defines conditions that must all be true for a policy to match.
+type PolicyMatchConfig struct {
+	Agents    []string          `yaml:"agents"`
+	Methods   []string          `yaml:"methods"`
+	Users     []string          `yaml:"users"`
+	IPs       []string          `yaml:"ips"`
+	Headers   map[string]string `yaml:"headers"`
+	TimeRange *TimeRangeConfig  `yaml:"time_range"`
+}
+
+// TimeRangeConfig restricts access to specific hours of the day.
+type TimeRangeConfig struct {
+	Start string `yaml:"start"` // "09:00" (HH:MM)
+	End   string `yaml:"end"`   // "18:00" (HH:MM)
+	TZ    string `yaml:"tz"`    // "Asia/Seoul", defaults to UTC
 }
 
 // CardSignatureConfig controls JWS signature verification for Agent Cards.
