@@ -1,0 +1,13 @@
+apiVersion: v2
+name: a2a-sentinel
+description: A lightweight, security-first A2A protocol gateway
+type: application
+version: 0.1.0
+appVersion: "0.3.0"
+keywords:
+  - a2a
+  - agent
+  - gateway
+  - security
+maintainers:
+  - name: vivars7
