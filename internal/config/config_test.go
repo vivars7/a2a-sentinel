@@ -182,6 +182,12 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	if cfg.Security.Replay.Store != "memory" {
 		t.Errorf("security.replay.store = %q, want %q", cfg.Security.Replay.Store, "memory")
 	}
+	if cfg.Security.Replay.NonceSource != "auto" {
+		t.Errorf("security.replay.nonce_source = %q, want %q", cfg.Security.Replay.NonceSource, "auto")
+	}
+	if cfg.Security.Replay.ClockSkew.Duration != 5*time.Second {
+		t.Errorf("security.replay.clock_skew = %v, want %v", cfg.Security.Replay.ClockSkew.Duration, 5*time.Second)
+	}
 
 	// Rate limit defaults
 	if cfg.Security.RateLimit.IP.PerIP != 200 {
@@ -824,6 +830,46 @@ func TestValidate_NegativeGlobalRateLimit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "listen.global_rate_limit must be positive") {
 		t.Errorf("error should mention global_rate_limit: %v", err)
+	}
+}
+
+func TestValidate_InvalidNonceSource(t *testing.T) {
+	yaml := `
+agents:
+  - name: test
+    url: http://localhost:9000
+security:
+  replay:
+    nonce_source: invalid
+`
+	p := writeTempYAML(t, yaml)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected validation error for invalid nonce_source")
+	}
+	if !strings.Contains(err.Error(), "security.replay.nonce_source must be one of") {
+		t.Errorf("error should mention nonce_source: %v", err)
+	}
+}
+
+func TestValidate_ValidNonceSources(t *testing.T) {
+	sources := []string{"auto", "header", "jsonrpc-id"}
+	for _, source := range sources {
+		t.Run(source, func(t *testing.T) {
+			yaml := `
+security:
+  replay:
+    nonce_source: ` + source + `
+agents:
+  - name: a
+    url: http://localhost:9000
+`
+			p := writeTempYAML(t, yaml)
+			_, err := Load(p)
+			if err != nil {
+				t.Errorf("nonce_source %q should be valid: %v", source, err)
+			}
+		})
 	}
 }
 

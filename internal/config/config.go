@@ -164,6 +164,8 @@ type ReplayConfig struct {
 	Enabled         bool     `yaml:"enabled"`
 	Window          Duration `yaml:"window"`
 	NoncePolicy     string   `yaml:"nonce_policy"`
+	NonceSource     string   `yaml:"nonce_source"`  // "auto", "header", "jsonrpc-id"
+	ClockSkew       Duration `yaml:"clock_skew"`     // tolerance for timestamp validation
 	Store           string   `yaml:"store"`
 	RedisURL        string   `yaml:"redis_url"`
 	CleanupInterval Duration `yaml:"cleanup_interval"`

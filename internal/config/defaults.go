@@ -140,6 +140,12 @@ func applyReplayDefaults(r *ReplayConfig) {
 	if r.NoncePolicy == "" {
 		r.NoncePolicy = "warn"
 	}
+	if r.NonceSource == "" {
+		r.NonceSource = "auto"
+	}
+	if r.ClockSkew.Duration == 0 {
+		r.ClockSkew.Duration = 5 * time.Second
+	}
 	if r.Store == "" {
 		r.Store = "memory"
 	}
