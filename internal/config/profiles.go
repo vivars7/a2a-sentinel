@@ -71,6 +71,8 @@ security:
     enabled: false
     window: 300s
     nonce_policy: warn
+    nonce_source: auto
+    clock_skew: 5s
     store: memory
     redis_url: ""
 
@@ -186,6 +188,8 @@ security:
     enabled: true
     window: 300s
     nonce_policy: warn
+    nonce_source: auto
+    clock_skew: 5s
     store: memory
     redis_url: ""
 

@@ -3,7 +3,7 @@
 // Layer 1 (Pre-Auth): GlobalRateLimiter, IPRateLimiter
 // Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter
 // Post-Auth: SSRFChecker (push notification URL validation)
-// Stubs (v0.2): JWSVerifier
+// Stub: JWSVerifier (card signatures verified during polling)
 package security
 
 import (
@@ -56,7 +56,7 @@ type RateLimitPipelineConfig struct {
 // BuildPipeline constructs the ordered security middleware chain.
 // Layer 1 (Pre-Auth): GlobalRateLimiter, IPRateLimiter
 // Layer 2 (Post-Auth): AuthMiddleware, UserRateLimiter, ReplayDetector, SSRFChecker
-// Stubs (v0.2): JWSVerifier
+// Stub: JWSVerifier (card signatures verified during polling)
 func BuildPipeline(cfg SecurityPipelineConfig) []Middleware {
 	var mws []Middleware
 
@@ -92,7 +92,7 @@ func BuildPipeline(cfg SecurityPipelineConfig) []Middleware {
 		mws = append(mws, NewPolicyGuard(engine, cfg.Logger))
 	}
 
-	// JWS verification (v0.2 stub)
+	// JWS verification (passthrough — card signatures verified during polling)
 	mws = append(mws, NewJWSVerifier())
 
 	// Replay detection
