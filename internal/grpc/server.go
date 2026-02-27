@@ -441,11 +441,19 @@ func (s *GRPCServer) getAgentTimeout(agentName string) time.Duration {
 }
 
 // sentinelErrorToGRPC converts a SentinelError to a gRPC status error.
+// It preserves the hint and docs_url in the error message for educational errors.
 func sentinelErrorToGRPC(err error) error {
 	sentErr, ok := err.(*sentinelerrors.SentinelError)
 	if !ok {
 		return status.Errorf(codes.Internal, "%v", err)
 	}
 	code := httpStatusToGRPCCode(sentErr.Code)
-	return status.Errorf(code, "%s (hint: %s)", sentErr.Message, sentErr.Hint)
+	msg := sentErr.Message
+	if sentErr.Hint != "" {
+		msg += " (hint: " + sentErr.Hint + ")"
+	}
+	if sentErr.DocsURL != "" {
+		msg += " [docs: " + sentErr.DocsURL + "]"
+	}
+	return status.Errorf(code, "%s", msg)
 }
