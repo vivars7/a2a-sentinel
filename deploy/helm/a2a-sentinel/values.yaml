@@ -1,0 +1,192 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/vivars7/a2a-sentinel
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  fsGroup: 65534
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  grpcPort: 9090
+  mcpPort: 8081
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  #  - host: sentinel.example.com
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  tls: []
+  #  - secretName: sentinel-tls
+  #    hosts:
+  #      - sentinel.example.com
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+serviceMonitor:
+  # Requires Prometheus Operator to be installed in the cluster
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  annotations: {}
+
+# sentinel.yaml configuration rendered into a ConfigMap
+config:
+  listen:
+    host: 0.0.0.0
+    port: 8080
+    max_connections: 100
+    global_rate_limit: 1000
+    trusted_proxies: []
+    tls:
+      cert_file: ""
+      key_file: ""
+
+  external_url: http://localhost:8080
+
+  mcp:
+    enabled: false
+    host: 127.0.0.1
+    port: 8081
+    auth:
+      token: ""
+
+  health:
+    liveness_path: /healthz
+    readiness_path: /readyz
+    readiness_mode: any_healthy
+
+  agents:
+    - name: example-agent
+      url: http://your-agent-service:9000
+      card_path: /.well-known/agent.json
+      poll_interval: 60s
+      timeout: 30s
+      max_streams: 10
+      default: true
+      allow_insecure: false
+      health_check:
+        enabled: true
+        interval: 30s
+      card_change_policy: alert
+
+  routing:
+    mode: path-prefix
+
+  card:
+    mode: gateway
+    gateway_jwk_file: ""
+
+  security:
+    card_signature:
+      require: false
+      trusted_jwks_urls: []
+      cache_ttl: 3600s
+
+    auth:
+      mode: passthrough-strict
+      schemes:
+        - type: bearer
+          jwt:
+            issuer: ""
+            audience: ""
+            jwks_url: ""
+      allow_unauthenticated: true
+
+    replay:
+      enabled: false
+      window: 300s
+      nonce_policy: warn
+      store: memory
+      redis_url: ""
+
+    rate_limit:
+      enabled: false
+      ip:
+        per_ip: 200
+        burst: 50
+        cleanup_interval: 5m
+      user:
+        per_user: 100
+        burst: 20
+        cleanup_interval: 5m
+      per_agent: 500
+
+    push:
+      block_private_networks: false
+      allowed_domains: []
+      require_https: false
+      require_challenge: false
+      hmac_secret: ""
+
+  body_inspection:
+    max_size: 1048576
+    skip_streaming: true
+
+  logging:
+    level: info
+    format: json
+    output: stdout
+    audit:
+      sampling_rate: 1.0
+      error_sampling_rate: 1.0
+      max_body_log_size: 1024
+
+  shutdown:
+    timeout: 30s
+    drain_timeout: 15s
+
+  migration:
+    agentgateway_version: "latest"

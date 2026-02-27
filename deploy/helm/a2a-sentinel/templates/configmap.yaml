@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "a2a-sentinel.fullname" . }}
+  labels:
+    {{- include "a2a-sentinel.labels" . | nindent 4 }}
+data:
+  sentinel.yaml: |
+    {{- toYaml .Values.config | nindent 4 }}
