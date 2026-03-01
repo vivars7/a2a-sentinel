@@ -75,6 +75,8 @@ Wait for services to be healthy (check logs with `docker compose logs -f`).
 
 Open **http://localhost:3000** for the interactive demo dashboard.
 
+![Demo Dashboard](assets/demo-dashboard.png)
+
 The setup includes two demo agents:
 - **echo-agent**: Standard synchronous A2A agent
 - **streaming-agent**: SSE streaming agent
