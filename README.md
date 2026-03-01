@@ -75,7 +75,7 @@ Wait for services to be healthy (check logs with `docker compose logs -f`).
 
 Open **http://localhost:3000** for the interactive demo dashboard.
 
-![Demo Dashboard](assets/demo-dashboard.png)
+![Demo Dashboard](assets/demo-dashboard.gif)
 
 The setup includes two demo agents:
 - **echo-agent**: Standard synchronous A2A agent
@@ -192,6 +192,13 @@ The gRPC binding translates A2A protocol messages to/from JSON-RPC internally. A
 │  └─────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────┘
 ```
+
+<details>
+<summary>MCP management in action (list agents, health check, agent cards)</summary>
+
+![MCP Demo](assets/demo-mcp.gif)
+
+</details>
 
 ### Component Breakdown
 
