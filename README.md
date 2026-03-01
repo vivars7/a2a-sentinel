@@ -193,12 +193,9 @@ The gRPC binding translates A2A protocol messages to/from JSON-RPC internally. A
 └───────────────────────────────────────────────────────────┘
 ```
 
-<details>
-<summary>MCP management in action (list agents, health check, agent cards)</summary>
+**MCP management in action** (list agents, health check, agent cards):
 
 ![MCP Demo](assets/demo-mcp.gif)
-
-</details>
 
 ### Component Breakdown
 
@@ -355,12 +352,7 @@ See `sentinel.yaml.example` for all available options including:
 
 ## Security
 
-<details>
-<summary>See security features in action (rate limiting, replay detection, educational errors)</summary>
-
 ![a2a-sentinel security demo](assets/demo-security.gif)
-
-</details>
 
 ### Authentication Modes
 
