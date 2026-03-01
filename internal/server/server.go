@@ -20,6 +20,7 @@ import (
 	sentinelerrors "github.com/vivars7/a2a-sentinel/internal/errors"
 	sentinelgrpc "github.com/vivars7/a2a-sentinel/internal/grpc"
 	"github.com/vivars7/a2a-sentinel/internal/health"
+	"github.com/vivars7/a2a-sentinel/internal/mcpserver"
 	"github.com/vivars7/a2a-sentinel/internal/protocol"
 	"github.com/vivars7/a2a-sentinel/internal/proxy"
 	"github.com/vivars7/a2a-sentinel/internal/router"
@@ -42,6 +43,7 @@ type Server struct {
 	mu            sync.Mutex
 	httpServer    *http.Server
 	grpcServer    *sentinelgrpc.GRPCServer
+	mcpServer     *mcpserver.Server
 	cardManager   cardStarter
 	listener      net.Listener // if non-nil, Start uses this instead of creating one
 	streamMgr     *proxy.StreamManager
@@ -186,6 +188,19 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		logger.Info("gRPC server configured", "port", cfg.Listen.GRPCPort)
 	}
 
+	// 11. Create MCP management server if enabled
+	if cfg.MCP.Enabled {
+		bridge := newMCPBridge(cardManager, streamMgr, cfg, version)
+		mcpCfg := mcpserver.Config{
+			Enabled: cfg.MCP.Enabled,
+			Host:    cfg.MCP.Host,
+			Port:    cfg.MCP.Port,
+			Token:   cfg.MCP.Auth.Token,
+		}
+		srv.mcpServer = mcpserver.NewServer(mcpCfg, bridge, logger)
+		logger.Info("MCP server configured", "host", cfg.MCP.Host, "port", cfg.MCP.Port)
+	}
+
 	return srv, nil
 }
 
@@ -244,6 +259,15 @@ func (s *Server) Start(ctx context.Context) error {
 		}()
 	}
 
+	// Start MCP management server if configured
+	if s.mcpServer != nil {
+		go func() {
+			if err := s.mcpServer.Start(ctx); err != nil {
+				s.logger.Error("mcp server error", "error", err)
+			}
+		}()
+	}
+
 	// Wait for context cancellation or server error
 	select {
 	case err := <-errCh:
@@ -289,6 +313,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// 2b. Graceful stop gRPC server
 	if s.grpcServer != nil {
 		s.grpcServer.GracefulStop()
+	}
+
+	// 2c. Shutdown MCP server
+	if s.mcpServer != nil {
+		if err := s.mcpServer.Shutdown(ctx); err != nil {
+			s.logger.Warn("mcp server shutdown error", "error", err)
+		}
 	}
 
 	// 3. Stop card manager
