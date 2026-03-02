@@ -377,24 +377,48 @@ See [Rate Limiting Configuration](../docs/SECURITY.md#rate-limiting) for advance
 
 | Field | Value |
 |-------|-------|
-| **HTTP Code** | 409 |
+| **HTTP Code** | 429 |
 | **Message** | Replay attack detected |
-| **Hint** | Include unique nonce and current timestamp in request |
-| **DocsURL** | https://a2a-sentinel.dev/docs/replay |
+| **Hint** | (varies by cause — see below) |
+| **DocsURL** | https://a2a-sentinel.dev/docs/replay-protection |
 
 **When it occurs:**
-- Same request is sent multiple times (detected via nonce)
-- Replay protection is enabled
-- Timestamp is too old (request replay from past)
+- Same request nonce is sent multiple times (duplicate nonce detected)
+- Timestamp is too old — exceeds `window` (default 300s)
+- Timestamp is too far in the future — exceeds `clock_skew` (default 5s)
 
-**Example error response:**
+#### ErrMissingReplayNonce
+
+| Field | Value |
+|-------|-------|
+| **HTTP Code** | 400 |
+| **Message** | Missing replay nonce |
+| **Hint** | Include X-Sentinel-Nonce header or a JSON-RPC id field. |
+| **DocsURL** | https://a2a-sentinel.dev/docs/replay-protection |
+
+**When it occurs:**
+- `nonce_policy: require` is set but the request has no nonce (no `X-Sentinel-Nonce` header and no JSON-RPC `id` field)
+- Request body could not be read for nonce extraction in `require` mode
+
+**Example error responses:**
 ```json
 {
   "error": {
-    "code": 409,
+    "code": 429,
     "message": "Replay attack detected",
-    "hint": "Include unique nonce and current timestamp in request",
-    "docs_url": "https://a2a-sentinel.dev/docs/replay"
+    "hint": "Request ID already seen within replay window. Use unique IDs for each request.",
+    "docs_url": "https://a2a-sentinel.dev/docs/replay-protection"
+  }
+}
+```
+
+```json
+{
+  "error": {
+    "code": 400,
+    "message": "Missing replay nonce",
+    "hint": "Include X-Sentinel-Nonce header or a JSON-RPC id field.",
+    "docs_url": "https://a2a-sentinel.dev/docs/replay-protection"
   }
 }
 ```
@@ -417,7 +441,8 @@ See [Rate Limiting Configuration](../docs/SECURITY.md#rate-limiting) for advance
    ```
 3. **Verify nonce uniqueness**: Never reuse the same nonce
 4. **Check timestamp freshness**: Ensure your system clock is synchronized (NTP)
-5. See [Replay Protection](../docs/SECURITY.md#replay-protection) for configuration
+5. **Timestamp rules**: Past timestamps accepted within `window` (default 300s), future timestamps within `clock_skew` (default 5s)
+6. See [Replay Protection](../docs/SECURITY.md#replay-protection) for configuration
 
 ---
 

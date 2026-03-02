@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.3] - 2026-03-02
+
+### Fixed
+- Replay detection: `require` mode now blocks requests with missing nonce (returns 400)
+- Replay detection: timestamp validation changed from symmetric (`|now-ts| > window+clock_skew`) to asymmetric (past checks against `window`, future checks against `clock_skew`) — aligns with industry standard (AWS Sig V4, OAuth 1.0, Stripe)
+- Replay detection: body read errors in `require` mode now return 400 instead of silently passing through
+- Replay detection: nonce TTL now uses `time.Now()` instead of request timestamp to prevent future-timestamp TTL inflation
+
+### Changed
+- Integration tests updated with JSON-RPC request bodies to satisfy `require` nonce policy
+
 ## [0.3.1] - 2026-02-27
 
 ### Fixed
