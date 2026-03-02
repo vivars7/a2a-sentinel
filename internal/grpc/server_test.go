@@ -1113,7 +1113,7 @@ func TestSentinelErrorToGRPC_AllPredefined(t *testing.T) {
 		{"ErrRateLimited", sentinelerrors.ErrRateLimited, codes.ResourceExhausted},
 		{"ErrAgentUnavailable", sentinelerrors.ErrAgentUnavailable, codes.Unavailable},
 		{"ErrStreamLimitExceeded", sentinelerrors.ErrStreamLimitExceeded, codes.ResourceExhausted},
-		{"ErrReplayDetected", sentinelerrors.ErrReplayDetected, codes.AlreadyExists},
+		{"ErrReplayDetected", sentinelerrors.ErrReplayDetected, codes.ResourceExhausted},
 		{"ErrSSRFBlocked", sentinelerrors.ErrSSRFBlocked, codes.PermissionDenied},
 		{"ErrInvalidRequest", sentinelerrors.ErrInvalidRequest, codes.InvalidArgument},
 		{"ErrNoRoute", sentinelerrors.ErrNoRoute, codes.NotFound},

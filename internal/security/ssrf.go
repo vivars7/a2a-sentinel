@@ -37,6 +37,8 @@ func init() {
 // SSRFChecker validates push notification URLs to prevent SSRF attacks.
 // It inspects requests that set push notification configuration and blocks
 // URLs that resolve to private/internal networks.
+// Note: Sentinel validates push destination URLs at registration time only.
+// It does not send push notifications — that is the backend agent's responsibility.
 type SSRFChecker struct {
 	blockPrivate   bool
 	allowedDomains []string
@@ -106,7 +108,10 @@ func IsPrivateNetwork(host string) bool {
 // When DNS lookup fails, behavior depends on dnsFailPolicy:
 // "block" (default) treats DNS failures as private (fail-closed).
 // "allow" treats DNS failures as non-private (fail-open).
-func (s *SSRFChecker) isPrivateNetworkWithPolicy(host string) bool {
+// isPrivateNetworkWithPolicy checks whether the host resolves to a private network.
+// Returns (isPrivate, dnsWarning). When DNS lookup fails and dns_fail_policy is "allow",
+// isPrivate is false but dnsWarning contains a warning message for operational visibility.
+func (s *SSRFChecker) isPrivateNetworkWithPolicy(host string) (bool, string) {
 	// Strip port if present
 	hostname := host
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -116,12 +121,12 @@ func (s *SSRFChecker) isPrivateNetworkWithPolicy(host string) bool {
 	// Check well-known private hostnames
 	lower := strings.ToLower(hostname)
 	if lower == "localhost" || strings.HasSuffix(lower, ".local") {
-		return true
+		return true, ""
 	}
 
 	// Try parsing as IP directly
 	if ip := net.ParseIP(hostname); ip != nil {
-		return isPrivateIP(ip)
+		return isPrivateIP(ip), ""
 	}
 
 	// Resolve hostname to IPs
@@ -133,25 +138,25 @@ func (s *SSRFChecker) isPrivateNetworkWithPolicy(host string) bool {
 				"host", hostname,
 				"error", err.Error(),
 			)
-			return false
+			return false, "DNS resolution failed for push URL"
 		}
 		// Default: "block" (fail-closed)
 		s.logger.Warn("ssrf: DNS lookup failed, blocking per dns_fail_policy",
 			"host", hostname,
 			"error", err.Error(),
 		)
-		return true
+		return true, ""
 	}
 
 	for _, ipStr := range ips {
 		if ip := net.ParseIP(ipStr); ip != nil {
 			if isPrivateIP(ip) {
-				return true
+				return true, ""
 			}
 		}
 	}
 
-	return false
+	return false, ""
 }
 
 // isPrivateIP checks if an IP address falls within any private range.
@@ -167,42 +172,46 @@ func isPrivateIP(ip net.IP) bool {
 // ValidatePushURL performs full validation of a push notification callback URL.
 // It checks the URL scheme, private network access, allowed domains, and performs
 // DNS rebinding defense by resolving the hostname and verifying resolved IPs.
-func (s *SSRFChecker) ValidatePushURL(rawURL string) error {
+// Returns a warning string (non-empty when DNS failed but was allowed by policy)
+// and an error if the URL should be blocked.
+func (s *SSRFChecker) ValidatePushURL(rawURL string) (warning string, err error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("invalid push notification URL: %w", err)
+		return "", fmt.Errorf("invalid push notification URL: %w", err)
 	}
 
 	// Check scheme
 	scheme := strings.ToLower(parsed.Scheme)
 	if scheme != "https" && scheme != "http" {
-		return fmt.Errorf("push notification URL must use http or https scheme, got %q", scheme)
+		return "", fmt.Errorf("push notification URL must use http or https scheme, got %q", scheme)
 	}
 
 	if s.requireHTTPS && scheme != "https" {
-		return fmt.Errorf("push notification URL must use HTTPS (got %s://)", scheme)
+		return "", fmt.Errorf("push notification URL must use HTTPS (got %s://)", scheme)
 	}
 
 	host := parsed.Hostname()
 	if host == "" {
-		return fmt.Errorf("push notification URL has empty host")
+		return "", fmt.Errorf("push notification URL has empty host")
 	}
 
 	// Check allowed domains (if configured)
 	if len(s.allowedDomains) > 0 {
 		if !s.isDomainAllowed(host) {
-			return fmt.Errorf("push notification URL host %q not in allowed domains", host)
+			return "", fmt.Errorf("push notification URL host %q not in allowed domains", host)
 		}
 	}
 
 	// Check private network (includes DNS rebinding defense via resolution)
 	if s.blockPrivate {
-		if s.isPrivateNetworkWithPolicy(parsed.Host) {
-			return fmt.Errorf("push notification URL resolves to private network: %s", host)
+		isPrivate, dnsWarning := s.isPrivateNetworkWithPolicy(parsed.Host)
+		if isPrivate {
+			return "", fmt.Errorf("push notification URL resolves to private network: %s", host)
 		}
+		warning = dnsWarning
 	}
 
-	return nil
+	return warning, nil
 }
 
 // isDomainAllowed checks if a hostname matches any of the allowed domains.
@@ -257,13 +266,23 @@ func (s *SSRFChecker) Process(next http.Handler) http.Handler {
 		}
 
 		// Validate the push URL
-		if err := s.ValidatePushURL(pushURL); err != nil {
+		warning, err := s.ValidatePushURL(pushURL)
+		if err != nil {
 			s.logger.Warn("ssrf: blocked push notification URL",
 				"url", pushURL,
 				"reason", err.Error(),
 			)
 			sentinelerrors.WriteHTTPError(w, sentinelerrors.ErrSSRFBlocked)
 			return
+		}
+
+		if warning != "" {
+			w.Header().Set("X-Sentinel-Warning", warning)
+			s.logger.Warn("ssrf: push URL registered with warning",
+				"url", pushURL,
+				"warning", warning,
+				"ssrf_dns_failed_but_allowed", true,
+			)
 		}
 
 		next.ServeHTTP(w, r)

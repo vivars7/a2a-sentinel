@@ -20,7 +20,7 @@ listen:
 external_url: http://localhost:8080
 
 mcp:
-  enabled: false
+  enabled: true
   host: 127.0.0.1
   port: 8081
   auth:
@@ -69,7 +69,7 @@ security:
     allow_unauthenticated: true
 
   replay:
-    enabled: false
+    enabled: true
     window: 300s
     nonce_policy: warn
     nonce_source: auto
