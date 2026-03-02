@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.4] - 2026-03-02
+
+### Fixed
+- Body inspection: `InspectAndRewind` now preserves full original body for downstream handlers using `io.MultiReader` (previously truncated at 1MB)
+- Error mapping: `ErrReplayDetected` HTTP code changed from 409 to 429 (consistent with replay.go inline errors)
+
+### Changed
+- Dev profile: MCP enabled by default (`mcp.enabled: true`) and replay enabled in warn mode (`replay.enabled: true`)
+- SSRF: `ValidatePushURL` now returns a warning when `dns_fail_policy: allow` and DNS fails — sets `X-Sentinel-Warning` header and logs `ssrf_dns_failed_but_allowed: true` for operational visibility
+- gRPC: added `TODO(v0.4)` comment for structured error details via `status.WithDetails()`
+- SSRF: added documentation note clarifying sentinel validates push URLs at registration time only
+
 ## [0.3.3] - 2026-03-02
 
 ### Fixed
