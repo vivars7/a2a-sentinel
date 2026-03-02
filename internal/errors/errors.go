@@ -29,7 +29,7 @@ var (
 	ErrRateLimited         = &SentinelError{Code: 429, Message: "Rate limit exceeded", Hint: "Wait before retrying. Configure security.rate_limit in sentinel.yaml", DocsURL: "https://a2a-sentinel.dev/docs/rate-limit"}
 	ErrAgentUnavailable    = &SentinelError{Code: 503, Message: "Target agent unavailable", Hint: "Check agent health with GET /readyz", DocsURL: "https://a2a-sentinel.dev/docs/agents"}
 	ErrStreamLimitExceeded = &SentinelError{Code: 429, Message: "Too many concurrent streams", Hint: "Max streams per agent reached. Configure agents[].max_streams", DocsURL: "https://a2a-sentinel.dev/docs/streaming"}
-	ErrReplayDetected      = &SentinelError{Code: 409, Message: "Replay attack detected", Hint: "Include unique nonce and current timestamp in request", DocsURL: "https://a2a-sentinel.dev/docs/replay"}
+	ErrReplayDetected      = &SentinelError{Code: 429, Message: "Replay attack detected", Hint: "Request ID already seen within replay window. Use unique IDs for each request.", DocsURL: "https://a2a-sentinel.dev/docs/replay-protection"}
 	ErrSSRFBlocked         = &SentinelError{Code: 403, Message: "Push notification URL blocked", Hint: "URL resolves to private network. Use public URLs or configure security.push.allowed_domains", DocsURL: "https://a2a-sentinel.dev/docs/ssrf"}
 	ErrInvalidRequest      = &SentinelError{Code: 400, Message: "Invalid request format", Hint: "Check A2A protocol specification for correct message format", DocsURL: "https://a2a-sentinel.dev/docs/protocol"}
 	ErrNoRoute             = &SentinelError{Code: 404, Message: "No matching agent found", Hint: "Check routing path or set a default agent", DocsURL: "https://a2a-sentinel.dev/docs/routing"}

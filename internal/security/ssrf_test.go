@@ -19,7 +19,7 @@ func TestSSRFChecker_DNSFailPolicy_Block(t *testing.T) {
 	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	// Non-existent domain should be blocked (DNS fails -> block)
-	err := checker.ValidatePushURL("https://this-domain-definitely-does-not-exist-xyz123.example.invalid/callback")
+	_, err := checker.ValidatePushURL("https://this-domain-definitely-does-not-exist-xyz123.example.invalid/callback")
 	if err == nil {
 		t.Error("expected error for unresolvable domain with block policy")
 	}
@@ -32,10 +32,13 @@ func TestSSRFChecker_DNSFailPolicy_Allow(t *testing.T) {
 		DNSFailPolicy:        "allow",
 	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	// Non-existent domain should be allowed (DNS fails -> allow)
-	err := checker.ValidatePushURL("https://this-domain-definitely-does-not-exist-xyz123.example.invalid/callback")
+	// Non-existent domain should be allowed (DNS fails -> allow) with warning
+	warning, err := checker.ValidatePushURL("https://this-domain-definitely-does-not-exist-xyz123.example.invalid/callback")
 	if err != nil {
 		t.Errorf("expected no error for unresolvable domain with allow policy, got: %v", err)
+	}
+	if warning == "" {
+		t.Error("expected warning for DNS-failed-but-allowed URL")
 	}
 }
 
@@ -54,7 +57,7 @@ func TestSSRFChecker_PrivateNetwork_Blocked(t *testing.T) {
 	}
 
 	for _, u := range privateURLs {
-		if err := checker.ValidatePushURL(u); err == nil {
+		if _, err := checker.ValidatePushURL(u); err == nil {
 			t.Errorf("expected private network block for %s", u)
 		}
 	}
@@ -66,7 +69,7 @@ func TestSSRFChecker_RequireHTTPS(t *testing.T) {
 		DNSFailPolicy: "block",
 	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	if err := checker.ValidatePushURL("http://example.com/callback"); err == nil {
+	if _, err := checker.ValidatePushURL("http://example.com/callback"); err == nil {
 		t.Error("expected error for non-HTTPS URL")
 	}
 }
@@ -78,7 +81,7 @@ func TestSSRFChecker_AllowedDomains(t *testing.T) {
 	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	// Not allowed domain should be rejected
-	if err := checker.ValidatePushURL("https://evil.com/callback"); err == nil {
+	if _, err := checker.ValidatePushURL("https://evil.com/callback"); err == nil {
 		t.Error("expected error for domain not in allowed list")
 	}
 }

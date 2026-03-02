@@ -20,8 +20,7 @@ type JSONRPCErrorObj struct {
 //   - 401 -> -32600 (Invalid Request)
 //   - 403 -> -32600 (Invalid Request)
 //   - 404 -> -32601 (Method not found)
-//   - 409 -> -32600 (Invalid Request)
-//   - 429 -> -32600 (Invalid Request)
+//   - 429 -> -32600 (Invalid Request; covers rate limit and replay detection)
 //   - 503 -> -32603 (Internal error)
 //   - default -> -32603 (Internal error)
 func ToJSONRPCError(err *SentinelError, requestID interface{}) JSONRPCError {
@@ -39,7 +38,7 @@ func ToJSONRPCError(err *SentinelError, requestID interface{}) JSONRPCError {
 
 func httpToJSONRPCCode(httpCode int) int {
 	switch httpCode {
-	case 400, 401, 403, 409, 429:
+	case 400, 401, 403, 429:
 		return -32600 // Invalid Request
 	case 404:
 		return -32601 // Method not found
