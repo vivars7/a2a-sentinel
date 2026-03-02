@@ -42,7 +42,7 @@ func NewMemoryNonceStore(window, cleanupInterval time.Duration) *MemoryNonceStor
 // CheckAndStore checks whether the nonce has been seen within the replay window.
 // Returns true if the nonce is new (first time seen), false if it is a replay.
 func (s *MemoryNonceStore) CheckAndStore(nonce string, timestamp time.Time) (bool, error) {
-	expiry := timestamp.Add(s.window)
+	expiry := time.Now().Add(s.window)
 
 	// Check if nonce already exists and is not expired
 	if v, ok := s.entries.Load(nonce); ok {
@@ -179,6 +179,15 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 			body, err := protocol.InspectAndRewind(r, 1024*1024)
 			if err != nil {
 				d.logger.Warn("replay: failed to read request body", "error", err)
+				if d.policy == "require" {
+					sentinelerrors.WriteHTTPError(w, &sentinelerrors.SentinelError{
+						Code:    400,
+						Message: "Failed to read request body for replay detection",
+						Hint:    "Ensure request body is readable and within size limits.",
+						DocsURL: "https://a2a-sentinel.dev/docs/replay-protection",
+					})
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -192,6 +201,15 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 				body, err := protocol.InspectAndRewind(r, 1024*1024)
 				if err != nil {
 					d.logger.Warn("replay: failed to read request body", "error", err)
+					if d.policy == "require" {
+						sentinelerrors.WriteHTTPError(w, &sentinelerrors.SentinelError{
+							Code:    400,
+							Message: "Failed to read request body for replay detection",
+							Hint:    "Ensure request body is readable and within size limits.",
+							DocsURL: "https://a2a-sentinel.dev/docs/replay-protection",
+						})
+						return
+					}
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -202,7 +220,16 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 		}
 
 		if nonce == "" {
-			// No nonce available — can't check for replay, pass through
+			if d.policy == "require" {
+				sentinelerrors.WriteHTTPError(w, &sentinelerrors.SentinelError{
+					Code:    400,
+					Message: "Missing replay nonce",
+					Hint:    "Include X-Sentinel-Nonce header or a JSON-RPC id field.",
+					DocsURL: "https://a2a-sentinel.dev/docs/replay-protection",
+				})
+				return
+			}
+			// warn mode: pass through
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -236,16 +263,33 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 		}
 
 		// Timestamp validation (only when header is present)
+		// Asymmetric: past checks against window, future checks against clock_skew
 		if hasTimestampHeader {
-			diff := now.Sub(ts)
-			if diff < 0 {
-				diff = -diff
-			}
-			if diff > d.window+d.clockSkew {
-				d.logger.Warn("replay: timestamp outside allowed window",
+			if now.Sub(ts) > d.window {
+				// Too old — stale request
+				d.logger.Warn("replay: timestamp too far in the past",
 					"timestamp", ts,
-					"diff", diff,
+					"age", now.Sub(ts),
 					"window", d.window,
+					"policy", d.policy,
+				)
+				if d.policy == "require" {
+					sentinelerrors.WriteHTTPError(w, &sentinelerrors.SentinelError{
+						Code:    429,
+						Message: "Replay attack detected",
+						Hint:    "Request timestamp is too old. Ensure clocks are synchronized.",
+						DocsURL: "https://a2a-sentinel.dev/docs/replay-protection",
+					})
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+			if ts.Sub(now) > d.clockSkew {
+				// Too far in the future — clock skew exceeded
+				d.logger.Warn("replay: timestamp too far in the future",
+					"timestamp", ts,
+					"ahead", ts.Sub(now),
 					"clock_skew", d.clockSkew,
 					"policy", d.policy,
 				)
@@ -253,12 +297,11 @@ func (d *ReplayDetector) Process(next http.Handler) http.Handler {
 					sentinelerrors.WriteHTTPError(w, &sentinelerrors.SentinelError{
 						Code:    429,
 						Message: "Replay attack detected",
-						Hint:    "Request timestamp is outside the allowed window. Ensure clocks are synchronized.",
+						Hint:    "Request timestamp is in the future beyond allowed clock skew.",
 						DocsURL: "https://a2a-sentinel.dev/docs/replay-protection",
 					})
 					return
 				}
-				// warn mode: log only, pass through
 				next.ServeHTTP(w, r)
 				return
 			}

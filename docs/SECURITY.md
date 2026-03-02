@@ -1078,7 +1078,7 @@ security:
 When the `X-Sentinel-Timestamp` header is present, sentinel validates that the request is within the replay window:
 
 - Accepts **RFC3339** format (e.g., `2026-02-27T12:00:00Z`) or **Unix epoch** (10-digit, e.g., `1740657600`)
-- Rejects if `|now - timestamp| > window + clock_skew`
+- Rejects if the timestamp is older than `window` (past) or more than `clock_skew` into the future
 - Without the header, `time.Now()` is used (no timestamp validation)
 
 **Flow**:
