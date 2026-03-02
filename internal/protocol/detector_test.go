@@ -180,15 +180,15 @@ func TestInspectAndRewind_MaxSize(t *testing.T) {
 		t.Errorf("inspected body len = %d, want 100", len(body))
 	}
 
-	// But the full body (up to maxSize+1 read) is restored for downstream
+	// The full original body is restored for downstream handlers
 	rewound, err := io.ReadAll(req.Body)
 	if err != nil {
 		t.Fatalf("ReadAll after rewind: %v", err)
 	}
 
-	// The restored body contains what was actually read (maxSize+1 = 101 bytes)
-	if len(rewound) != 101 {
-		t.Errorf("rewound body len = %d, want 101", len(rewound))
+	// The restored body contains the FULL original content (200 bytes), not just maxSize+1
+	if len(rewound) != 200 {
+		t.Errorf("rewound body len = %d, want 200", len(rewound))
 	}
 }
 
