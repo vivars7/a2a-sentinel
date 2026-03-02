@@ -124,9 +124,10 @@ func TestSecurityPipeline_Integration_IPRateLimited(t *testing.T) {
 	token := makeFakeJWT("bob@example.com")
 
 	// First request should pass (uses the single burst token)
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"ip-rl-1"}`))
 	req.RemoteAddr = "198.51.100.1:12345"
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -135,9 +136,10 @@ func TestSecurityPipeline_Integration_IPRateLimited(t *testing.T) {
 	}
 
 	// Second request from same IP should be rate limited
-	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"ip-rl-2"}`))
 	req.RemoteAddr = "198.51.100.1:12345"
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -195,9 +197,10 @@ func TestSecurityPipeline_Integration_UserRateLimited(t *testing.T) {
 	token := makeFakeJWT("charlie@example.com")
 
 	// First request should pass
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"user-rl-1"}`))
 	req.RemoteAddr = "203.0.113.3:12345"
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -206,9 +209,10 @@ func TestSecurityPipeline_Integration_UserRateLimited(t *testing.T) {
 	}
 
 	// Second request from same user (different IP) should be rate limited
-	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"user-rl-2"}`))
 	req.RemoteAddr = "203.0.113.4:12345" // different IP
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -311,9 +315,11 @@ func TestSecurityPipeline_Integration_TwoLayerRateLimit(t *testing.T) {
 
 	// Alice sends 2 requests from IP A (exhausts IP A's burst)
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","method":"test","id":"two-layer-alice-%d"}`, i)
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 		req.RemoteAddr = "198.51.100.10:12345"
 		req.Header.Set("Authorization", "Bearer "+tokenAlice)
+		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -322,9 +328,10 @@ func TestSecurityPipeline_Integration_TwoLayerRateLimit(t *testing.T) {
 	}
 
 	// Alice's 3rd request from IP A should be blocked by IP rate limit
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"two-layer-alice-2"}`))
 	req.RemoteAddr = "198.51.100.10:12345"
 	req.Header.Set("Authorization", "Bearer "+tokenAlice)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -332,9 +339,10 @@ func TestSecurityPipeline_Integration_TwoLayerRateLimit(t *testing.T) {
 	}
 
 	// Bob from a different IP should still be allowed (independent IP bucket)
-	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"two-layer-bob-0"}`))
 	req.RemoteAddr = "198.51.100.20:12345"
 	req.Header.Set("Authorization", "Bearer "+tokenBob)
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -343,9 +351,10 @@ func TestSecurityPipeline_Integration_TwoLayerRateLimit(t *testing.T) {
 
 	// Alice from a different IP should pass IP limit but still have her user burst
 	// (She used 2 user tokens above from IP A, so user burst is exhausted)
-	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"two-layer-alice-3"}`))
 	req.RemoteAddr = "198.51.100.30:12345" // new IP
 	req.Header.Set("Authorization", "Bearer "+tokenAlice)
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -403,15 +412,17 @@ func TestSecurityPipeline_Integration_ErrorFormat(t *testing.T) {
 
 			if tt.name == "ip_rate_limited" {
 				// Exhaust burst first
-				req := httptest.NewRequest(http.MethodPost, "/", nil)
+				req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"errfmt-exhaust"}`))
 				req.RemoteAddr = "198.51.100.99:12345"
 				req.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set("Content-Type", "application/json")
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, req)
 			}
 
-			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","method":"test","id":"errfmt-main"}`))
 			req.RemoteAddr = "198.51.100.99:12345"
+			req.Header.Set("Content-Type", "application/json")
 			if tt.name != "auth_required" {
 				req.Header.Set("Authorization", "Bearer "+token)
 			}
