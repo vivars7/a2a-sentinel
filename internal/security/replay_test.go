@@ -401,23 +401,22 @@ func TestReplayDetector_NoID(t *testing.T) {
 
 	handler := rd.Process(backend)
 
-	// JSON-RPC notification (no id field)
+	// JSON-RPC notification (no id field) — require mode blocks missing nonce with 400
 	body := `{"jsonrpc":"2.0","method":"notification/test"}`
 
-	// Should pass through even when sent twice
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Errorf("request %d: expected 200, got %d", i, rec.Code)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("request %d: expected 400 (require mode, no nonce), got %d", i, rec.Code)
 		}
 	}
 
-	if backendCalls != 2 {
-		t.Errorf("expected backend called 2 times for no-id requests, got %d", backendCalls)
+	if backendCalls != 0 {
+		t.Errorf("expected backend called 0 times (all blocked), got %d", backendCalls)
 	}
 }
 
@@ -430,13 +429,15 @@ func TestReplayDetector_NullID(t *testing.T) {
 	}, newTestLogger())
 	defer rd.Stop()
 
+	var backendCalls int
 	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
 		w.WriteHeader(http.StatusOK)
 	})
 
 	handler := rd.Process(backend)
 
-	// null id should be treated as no id — pass through
+	// null id is treated as no nonce — require mode returns 400
 	body := `{"jsonrpc":"2.0","method":"test","id":null}`
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -444,9 +445,13 @@ func TestReplayDetector_NullID(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Errorf("null id request %d: expected 200, got %d", i, rec.Code)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("null id request %d: expected 400 (require mode, no nonce), got %d", i, rec.Code)
 		}
+	}
+
+	if backendCalls != 0 {
+		t.Errorf("expected backend called 0 times (all blocked), got %d", backendCalls)
 	}
 }
 
@@ -530,19 +535,26 @@ func TestReplayDetector_EmptyBody(t *testing.T) {
 	}, newTestLogger())
 	defer rd.Stop()
 
+	var backendCalls int
 	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
 		w.WriteHeader(http.StatusOK)
 	})
 
 	handler := rd.Process(backend)
 
+	// Empty body has no nonce — require mode returns 400
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("empty body: expected 200, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty body: expected 400 (require mode, no nonce), got %d", rec.Code)
+	}
+
+	if backendCalls != 0 {
+		t.Errorf("expected backend called 0 times (blocked), got %d", backendCalls)
 	}
 }
 
@@ -719,28 +731,44 @@ func TestReplayDetector_NonceSourceHeader(t *testing.T) {
 	}, newTestLogger())
 	defer rd.Stop()
 
+	var backendCalls int
 	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
 		w.WriteHeader(http.StatusOK)
 	})
 	handler := rd.Process(backend)
 
-	// No header nonce — should pass through (can't check without header)
+	// No header nonce — require mode blocks with 400 (header source, no header present)
 	body := `{"jsonrpc":"2.0","method":"test","id":"req-1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("no header with source=header: expected 200, got %d", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("no header with source=header (require mode): expected 400, got %d", rec.Code)
 	}
 
-	// Same body sent again (no header) — should still pass (header mode ignores body id)
+	// Same body sent again (no header) — also blocked
 	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("replay without header in header mode (require): expected 400, got %d", rec.Code)
+	}
+
+	if backendCalls != 0 {
+		t.Errorf("expected backend called 0 times (all blocked), got %d", backendCalls)
+	}
+
+	// With header present — should pass
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sentinel-Nonce", "header-nonce-unique-1")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Errorf("replay without header in header mode: expected 200 (pass through), got %d", rec.Code)
+		t.Errorf("with header nonce (require): expected 200, got %d", rec.Code)
 	}
 }
 
@@ -1006,5 +1034,55 @@ func TestReplayDetector_AutoFallbackToBodyID(t *testing.T) {
 
 	if backendCalls != 1 {
 		t.Errorf("expected 1 backend call, got %d", backendCalls)
+	}
+}
+
+func TestReplayDetector_TimestampAsymmetric(t *testing.T) {
+	rd := NewReplayDetector(ReplayDetectorConfig{
+		Enabled:         true,
+		Window:          5 * time.Minute,
+		NoncePolicy:     "require",
+		NonceSource:     "auto",
+		ClockSkew:       5 * time.Second,
+		CleanupInterval: 1 * time.Minute,
+	}, newTestLogger())
+	defer rd.Stop()
+
+	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rd.Process(backend)
+
+	tests := []struct {
+		name     string
+		offset   time.Duration
+		wantCode int
+	}{
+		{"past within window", -4 * time.Minute, http.StatusOK},
+		{"past at window boundary", -5*time.Minute + time.Second, http.StatusOK},
+		{"past beyond window", -5*time.Minute - time.Second, http.StatusTooManyRequests},
+		{"future within clock_skew", 3 * time.Second, http.StatusOK},
+		{"future at clock_skew boundary", 4 * time.Second, http.StatusOK},
+		{"future beyond clock_skew", 6 * time.Second, http.StatusTooManyRequests},
+		{"future at old symmetric boundary (60s)", 60 * time.Second, http.StatusTooManyRequests},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := time.Now().Add(tc.offset).UTC().Format(time.RFC3339)
+			nonce := fmt.Sprintf("asym-nonce-%d", i)
+			body := fmt.Sprintf(`{"jsonrpc":"2.0","method":"test","id":"asym-%d"}`, i)
+
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Sentinel-Nonce", nonce)
+			req.Header.Set("X-Sentinel-Timestamp", ts)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantCode {
+				t.Errorf("offset=%v: expected %d, got %d; body: %s", tc.offset, tc.wantCode, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
