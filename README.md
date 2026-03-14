@@ -661,7 +661,7 @@ See [docs/MIGRATION.md](docs/MIGRATION.md) for the full migration guide.
 - **Error reference**: [docs/ERRORS.md](docs/ERRORS.md)
 - **Migration guide**: [docs/MIGRATION.md](docs/MIGRATION.md)
 - **Changelog**: [CHANGELOG.md](CHANGELOG.md)
-- **A2A Protocol spec**: https://a2a-protocol.github.io/spec/
+- **A2A Protocol spec**: https://a2a-protocol.org/latest/specification/
 
 ### Issues & Feedback
 

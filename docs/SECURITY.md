@@ -1367,7 +1367,7 @@ We appreciate your help securing a2a-sentinel for everyone.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — System architecture and request flow
 - **[ERRORS.md](ERRORS.md)** — Error catalog and troubleshooting
 - **[Configuration Reference](../sentinel.yaml.example)** — Full sentinel.yaml schema with all options
-- **[A2A Protocol Spec](https://a2a-protocol.github.io/spec/)** — Official A2A specification
+- **[A2A Protocol Spec](https://a2a-protocol.org/latest/specification/)** — Official A2A specification
 
 ---
 

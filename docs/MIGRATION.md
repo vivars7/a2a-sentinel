@@ -659,9 +659,9 @@ curl http://localhost:8080/readyz
 
 ### A2A Protocol Resources
 
-- **Spec**: https://a2a-protocol.github.io/spec/
+- **Spec**: https://a2a-protocol.org/latest/specification/
 - **Protocol Bindings**: JSON-RPC 2.0, gRPC, HTTP+JSON/REST
-- **Agent Card Format**: https://a2a-protocol.github.io/spec/#agent-card
+- **Agent Card Format**: https://a2a-protocol.org/latest/specification/#agent-card
 
 ---
 
