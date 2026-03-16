@@ -598,6 +598,13 @@ Optional MCP (Model Context Protocol) server for gateway management. Implements 
 - **Authenticated** (valid Bearer token): can access all tools and resources
 - **Invalid token** (wrong Bearer token): rejected with 401
 
+**Internationalization (i18n):**
+- Accept-Language header → automatic language detection
+- Supported: English (en), Korean (ko)
+- Tool descriptions, resource descriptions, and error messages are localized
+- Fallback chain: requested language → config default → English
+- Translation files: `internal/i18n/locales/{lang}.json` (Go embed)
+
 **tools/list behavior:**
 - Anonymous: returns 9 read-only tools
 - Authenticated: returns all 15 tools (9 read + 6 write)

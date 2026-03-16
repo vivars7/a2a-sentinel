@@ -56,6 +56,7 @@ a2a-sentinel is not trying to replace [agentgateway](https://github.com/agentgat
 - [x] Extended Prometheus metrics with histograms (prometheus/client_golang)
 - [x] Helm chart for Kubernetes deployment
 - [x] ABAC policy engine (IP, user, agent, method, time-based, header rules)
+- [x] Internationalization (i18n) — Accept-Language based, Korean + English
 
 ---
 

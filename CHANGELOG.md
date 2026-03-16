@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.6] - 2026-03-16
+
+### Added
+- Internationalization (i18n) support with Accept-Language header negotiation
+- Korean (ko) and English (en) locale files with ~75 translation keys
+- `internal/i18n` package: Bundle, Localizer, embedded JSON locale loading
+- MCP server: tool descriptions, resource descriptions, error messages translated
+- Gateway errors: `SentinelError.Localize()` method for translated error responses
+- Localizer context key (`ctxkeys.WithLocalizer/LocalizerFrom`)
+- Localizer middleware: auto-creates localizer from Accept-Language on every request
+- Korean documentation: README.ko.md, ARCHITECTURE.ko.md, SECURITY.ko.md
+- `locale.default` config option in sentinel.yaml
+
+### Changed
+- MCP `tools/list` returns localized tool descriptions based on Accept-Language
+- MCP `resources/list` returns localized resource names and descriptions
+- Gateway error responses (hint, message) are localized when localizer is in context
+
+---
+
 ## [0.3.5] - 2026-03-16
 
 ### Changed

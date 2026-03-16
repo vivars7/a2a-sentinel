@@ -56,6 +56,7 @@ a2a-sentinel은 [agentgateway](https://github.com/agentgateway/agentgateway)(Kub
 - [x] 히스토그램을 포함한 확장 Prometheus 메트릭 (prometheus/client_golang)
 - [x] Kubernetes 배포용 Helm 차트
 - [x] ABAC 정책 엔진 (IP, 사용자, 에이전트, 메서드, 시간 기반, 헤더 규칙)
+- [x] 다국어 지원 (i18n) — Accept-Language 기반, 한국어 + 영어
 
 ---
 
