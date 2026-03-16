@@ -71,7 +71,7 @@ a2a-sentinel/
 │   ├── router/                   # Routing (path-prefix, single)
 │   ├── agentcard/                # Agent Card manager (polling, cache, change detection)
 │   ├── audit/                    # OTel-compatible audit logging + sampling
-│   └── mcpserver/                # MCP server (default OFF, 127.0.0.1, read-only v0.1)
+│   └── mcpserver/                # MCP server (default OFF, 127.0.0.1, MCP 2025-11-25 Streamable HTTP)
 ├── examples/                     # Sample agents (Python/Flask)
 └── docs/                         # Documentation
 ```

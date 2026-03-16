@@ -45,7 +45,7 @@ a2a-sentinel is not trying to replace [agentgateway](https://github.com/agentgat
 - [x] Agent Card JWS signature verification
 - [x] Push Notification SSRF protection
 - [x] Replay attack prevention (nonce + timestamp)
-- [x] Full MCP server (13 tools, 4 resources, read + write)
+- [x] Full MCP server (15 tools, 4 resources, MCP 2025-11-25 Streamable HTTP)
 - [x] sentinel migrate command (-> agentgateway)
 - [x] Card change approve mode (MCP-based)
 - [x] Prometheus-compatible metrics endpoint (/metrics)
@@ -179,16 +179,17 @@ The gRPC binding translates A2A protocol messages to/from JSON-RPC internally. A
 │  └────────────────────┘  └───────────────────────────┘    │
 │                                                           │
 │  ┌─────────────────────────────────────────────────────┐  │
-│  │ MCP Server (127.0.0.1:8081) — 15 tools              │  │
-│  │ Read:  list_agents, get_agent_status,               │  │
-│  │        get_aggregated_card, health_check,           │  │
-│  │        get_config, get_audit_log, get_metrics       │  │
-│  │ Write: update_rate_limit, reload_config,            │  │
-│  │        toggle_agent, rotate_api_key,                │  │
-│  │        flush_replay_cache, trigger_card_poll        │  │
-│  │ Card:  list_pending_changes,                        │  │
+│  │ MCP Server (127.0.0.1:8081) — MCP 2025-11-25        │  │
+│  │ 15 tools (9 read + 6 write), 4 resources            │  │
+│  │ 3-state auth: anonymous / authenticated / reject    │  │
+│  │ Read:  list_agents, health_check,                   │  │
+│  │        get_blocked_requests, get_agent_card,        │  │
+│  │        get_aggregated_card, get_rate_limit_status,  │  │
+│  │        list_policies, evaluate_policy,              │  │
+│  │        list_pending_changes                         │  │
+│  │ Write: update_rate_limit, register_agent,           │  │
+│  │        deregister_agent, send_test_message,         │  │
 │  │        approve_card_change, reject_card_change      │  │
-│  │ Policy: list_policies, evaluate_policy              │  │
 │  └─────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────┘
 ```
@@ -346,7 +347,7 @@ See `sentinel.yaml.example` for all available options including:
 - **logging**: Audit sampling, max body log size, output format
 - **grpc**: gRPC binding port, max message size, reflection
 - **reload**: Hot-reload settings (watch, debounce)
-- **mcp**: Port, auth token, enabled flag
+- **mcp**: Port, auth token, enabled flag (MCP 2025-11-25 Streamable HTTP)
 
 ---
 

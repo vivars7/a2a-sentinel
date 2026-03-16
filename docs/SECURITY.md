@@ -1187,6 +1187,48 @@ If `trusted_proxies` is empty → use `RemoteAddr` only (don't trust X-Forwarded
 
 ---
 
+## MCP Server Security
+
+The MCP management server (port 8081, localhost-only) implements MCP 2025-11-25 Streamable HTTP with a 3-state authentication model.
+
+### 3-State Authentication Model
+
+| State | Condition | Access |
+|-------|-----------|--------|
+| **Anonymous** | No `Authorization` header | Read-only tools and resources |
+| **Authenticated** | Valid `Authorization: Bearer <token>` | All tools and resources |
+| **Rejected** | Invalid `Authorization: Bearer <wrong>` | 401 Unauthorized — no fallback |
+
+The key security property: **invalid tokens are always rejected** (no silent downgrade to anonymous). This prevents token confusion attacks where a misconfigured client might accidentally gain anonymous access.
+
+### tools/list Filtering
+
+Anonymous sessions see only 9 read-only tools. Authenticated sessions see all 15 tools (9 read + 6 write). This means:
+- Write operations cannot be discovered by unauthenticated clients
+- Read tools are intentionally public for monitoring integrations
+
+### Session Management
+
+On `initialize`, the server returns a `Mcp-Session-Id` header containing a crypto-random 16-byte hex value. Subsequent requests must include this header. GET and DELETE requests return 405 Method Not Allowed (POST-only per Streamable HTTP spec).
+
+### Network Isolation
+
+The MCP server always binds to `127.0.0.1` only. It is never reachable from the network, even if `listen.address` is set to `0.0.0.0`. This is an architectural guarantee, not a configuration option.
+
+### Configuring MCP Auth
+
+```yaml
+mcp:
+  enabled: true
+  port: 8081
+  auth:
+    token: "your-mcp-token"
+```
+
+Without `auth.token`, write tools return a tool-level error (`-32001`) when called. Read tools and resources remain accessible anonymously regardless.
+
+---
+
 ## Error Messages & Hints
 
 Every security error includes:

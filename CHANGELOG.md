@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.5] - 2026-03-16
+
+### Changed
+- MCP protocol upgraded from 2024-11-05 to 2025-11-25 (Streamable HTTP)
+- MCP auth refactored: HTTP-level blanket auth removed, replaced with 3-state model (anonymous/authenticated/invalid token → 401)
+- MCP `tools/list` now filters by auth state: anonymous sessions see 9 read-only tools, authenticated sessions see all 15 tools
+- MCP session management: `Mcp-Session-Id` header generated on initialize, required for subsequent requests
+
+### Added
+- MCP notification handling: JSON-RPC notifications return 202 Accepted (supports `notifications/initialized`)
+- MCP session ID generation using crypto-random 16-byte hex
+- Invalid Bearer token rejection at HTTP level (401) — no silent fallback to anonymous
+
+---
+
 ## [0.3.4] - 2026-03-02
 
 ### Fixed

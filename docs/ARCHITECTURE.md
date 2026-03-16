@@ -577,50 +577,55 @@ Records all requests and security decisions in OTel-compatible format.
 
 ### `mcpserver/` — MCP Management Server
 
-Optional MCP (Model Context Protocol) server for gateway management.
+Optional MCP (Model Context Protocol) server for gateway management. Implements MCP 2025-11-25 Streamable HTTP transport.
 
 **Key features:**
 - Disabled by default (`mcp.enabled: true` to enable)
 - Listens on 127.0.0.1 only (local access)
-- Token-based authentication for write operations (optional)
-- 15 tools (read + write + card approval + policy), 4 resources
+- MCP 2025-11-25 Streamable HTTP (POST-only, session management)
+- 3-state authentication: anonymous / authenticated / invalid token rejection
+- 15 tools (9 read + 6 write), 4 resources
 
-**Read tools** (no auth required):
+**Protocol details:**
+- `initialize` → returns `Mcp-Session-Id` header (crypto-random 16-byte hex)
+- Subsequent requests must include `Mcp-Session-Id` header
+- JSON-RPC notifications → 202 Accepted (no response body)
+- GET/DELETE → 405 Method Not Allowed
+- Invalid Bearer token → 401 Unauthorized (no silent fallback)
+
+**Authentication model:**
+- **Anonymous** (no Authorization header): can access read tools and resources
+- **Authenticated** (valid Bearer token): can access all tools and resources
+- **Invalid token** (wrong Bearer token): rejected with 401
+
+**tools/list behavior:**
+- Anonymous: returns 9 read-only tools
+- Authenticated: returns all 15 tools (9 read + 6 write)
+
+**Read tools** (anonymous access):
 - `list_agents` — List all configured agents with health status
-- `get_agent_status` — Get detailed status for one agent
-- `get_aggregated_card` — Fetch merged Agent Card
 - `health_check` — Check gateway and agent health
-- `get_config` — Get current gateway configuration
-- `get_audit_log` — Query recent audit log entries
-- `get_metrics` — Get current Prometheus metrics
-
-**Write tools** (auth token required):
-- `update_rate_limit` — Update rate limit settings at runtime
-- `reload_config` — Reload sentinel.yaml without restart
-- `toggle_agent` — Enable/disable an agent
-- `rotate_api_key` — Rotate API key for authentication
-- `flush_replay_cache` — Clear the replay nonce cache
-- `trigger_card_poll` — Force immediate Agent Card poll for an agent
-
-**Card approval tools** (auth token required):
+- `get_blocked_requests` — Retrieve blocked requests within time window
+- `get_agent_card` — Get Agent Card for a specific agent
+- `get_aggregated_card` — Fetch merged Agent Card
+- `get_rate_limit_status` — Get rate limit state per agent
+- `list_policies` — List ABAC policies
+- `evaluate_policy` — Simulate policy decision
 - `list_pending_changes` — List pending Agent Card changes
+
+**Write tools** (Bearer token required):
+- `update_rate_limit` — Update rate limit for an agent
+- `register_agent` — Register a new backend agent
+- `deregister_agent` — Remove an agent
+- `send_test_message` — Send test message to an agent
 - `approve_card_change` — Approve a pending card change
 - `reject_card_change` — Reject a pending card change
 
-**Policy tools** (auth token required):
-- `list_policies` — List all configured ABAC policies with priority and conditions
-- `evaluate_policy` — Test a policy against a simulated request context
-
-**Resources** (4):
-- `sentinel://config` — Current configuration
-- `sentinel://agents` — Agent list with health
-- `sentinel://audit` — Recent audit entries
-- `sentinel://metrics` — Prometheus metrics snapshot
-
-**Design:**
-- Read tools are safe for monitoring and debugging
-- Write tools require MCP auth token for safety
-- Card approval tools support the `approve` change policy workflow
+**Resources** (anonymous access, 4):
+- `sentinel://config` — Current configuration (secrets masked)
+- `sentinel://metrics` — Request metrics (total, blocked, active streams, uptime)
+- `sentinel://agents/{name}` — Per-agent status and card
+- `sentinel://security/report` — Security summary
 
 ---
 

@@ -501,39 +501,65 @@ See [Rate Limiting Configuration](../docs/SECURITY.md#rate-limiting) for advance
 
 | Field | Value |
 |-------|-------|
-| **HTTP Code** | 403 |
+| **HTTP Code** | 403 (tool-level) / 401 (transport-level) |
 | **Message** | MCP operation unauthorized |
-| **Hint** | Provide a valid MCP auth token. Configure mcp.auth_token in sentinel.yaml |
+| **Hint** | Provide a valid MCP auth token. Configure mcp.auth.token in sentinel.yaml |
 | **DocsURL** | https://a2a-sentinel.dev/docs/mcp |
 
 **When it occurs:**
-- A write operation is attempted on the MCP server without a valid auth token
-- The MCP auth token does not match the configured token
-- A destructive MCP tool (e.g., `reload_config`, `rotate_api_key`) is called without authorization
+- **401 (transport-level)**: An `Authorization` header is present but the Bearer token is invalid
+- **-32001 (tool-level)**: A write tool is called without a valid Bearer token, or no token is configured
+- Read tools and resources are always accessible without authentication (anonymous access)
 
-**Example error response:**
+**MCP 3-state authentication model:**
+- No `Authorization` header → anonymous session (read-only tools visible)
+- Valid `Authorization: Bearer <token>` → authenticated session (all tools visible)
+- Invalid `Authorization: Bearer <wrong>` → 401 Unauthorized (rejected immediately)
+
+**Example error responses:**
+
+Transport-level (invalid token):
 ```json
 {
+  "jsonrpc": "2.0",
   "error": {
-    "code": 403,
-    "message": "MCP operation unauthorized",
-    "hint": "Provide a valid MCP auth token. Configure mcp.auth_token in sentinel.yaml",
-    "docs_url": "https://a2a-sentinel.dev/docs/mcp"
+    "code": -32001,
+    "message": "Unauthorized: invalid Bearer token"
+  }
+}
+```
+
+Tool-level (write tool without auth):
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "request-id",
+  "error": {
+    "code": -32001,
+    "message": "Unauthorized: valid Bearer token required for write operations"
   }
 }
 ```
 
 **How to fix:**
-1. **Provide auth token**: Include the MCP auth token in your request
+1. **Provide auth token**: Include the Bearer token for write operations:
+   ```bash
+   curl -X POST http://127.0.0.1:8081/ \
+     -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"register_agent","arguments":{...}}}'
+   ```
 2. **Check configuration**: Verify the token matches what is configured:
    ```yaml
    mcp:
      enabled: true
      port: 8081
-     auth_token: "your-mcp-token"
+     auth:
+       token: "your-mcp-token"
    ```
-3. **Read-only tools**: Some MCP tools (e.g., `list_agents`, `health_check`) do not require auth tokens
-4. See the MCP server section in [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--mcp-management-server) for details
+3. **Read-only access**: Tools like `list_agents`, `health_check` do not require auth tokens
+4. **Anonymous discovery**: `initialize`, `tools/list`, and `resources/list` work without authentication
+5. See the MCP server section in [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--mcp-management-server) for details
 
 ---
 
